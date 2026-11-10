@@ -158,7 +158,75 @@
       <div id="ride-list"></div>
     </section>
 
+    <!-- TODAY (owner only, switched on in Settings) -->
+    <section class="view" id="view-today" data-title="Today">
+      <div class="panel"><h2 id="wx-title">Weather</h2><div id="today-weather" class="muted small">Loading…</div></div>
+      <div class="panel"><h2>Briefing</h2><div id="today-briefing" class="muted small">Loading…</div>
+        <div id="today-briefing-history" class="muted small" style="margin-top:12px"></div></div>
+      <div class="panel">
+        <h2>Homework</h2>
+        <div id="today-homework" class="muted small">Loading…</div>
+        <form id="hw-form" style="margin-top:14px">
+          <label class="field">Subject<input id="hw-subject" maxlength="80" required></label>
+          <label class="field">What to do<textarea id="hw-desc" maxlength="2000" required></textarea></label>
+          <label class="field">Due<input type="date" id="hw-due"></label>
+          <button class="btn primary wide" type="submit">Add homework</button>
+          <div class="admin-msg" id="hw-msg"></div>
+        </form>
+      </div>
+    </section>
+
+    <!-- TIMETABLE (owner only; the server also checks the login) -->
+    <section class="view" id="view-timetable" data-title="Timetable">
+      <div class="panel tt-head">
+        <button class="btn small" id="tt-prev">←</button>
+        <div class="tt-title"><strong id="tt-date"></strong><div class="muted small" id="tt-status"></div></div>
+        <button class="btn small" id="tt-next">→</button>
+      </div>
+      <div class="row" style="margin-bottom:12px"><button class="btn small" id="tt-today">Today</button></div>
+      <div class="panel"><h2>Changes</h2><div id="tt-changes"></div></div>
+      <div class="panel"><h2>Lessons</h2><div id="tt-lessons"></div></div>
+      <div class="panel"><h2>Homework</h2><div id="tt-homework"></div></div>
+    </section>
+
+    <!-- ADMIN (owner only; the database also enforces access) -->
+    <section class="view" id="view-admin" data-title="Admin">
+      <div class="admin-tabs">
+        <button class="filter on" data-admin-tab="examples">Examples</button>
+        <button class="filter" data-admin-tab="reviews">Reviews</button>
+        <button class="filter" data-admin-tab="questions">Questions</button>
+        <button class="filter" data-admin-tab="requests">Requests</button>
+      </div>
+
+      <div id="admin-examples">
+        <div class="panel">
+          <h2>Add an example</h2>
+          <form id="example-form">
+            <label class="field">Image<input type="file" id="ex-file" accept="image/*" required></label>
+            <label class="field">Title<input id="ex-title" maxlength="120" required></label>
+            <label class="field">Description<textarea id="ex-desc" maxlength="1000"></textarea></label>
+            <button class="btn primary wide" type="submit" id="ex-btn">Upload</button>
+            <div class="admin-msg" id="ex-msg"></div>
+          </form>
+        </div>
+        <div class="panel"><h2>Examples</h2><div id="examples-list" class="muted small">Loading…</div></div>
+      </div>
+
+      <div id="admin-reviews" class="hidden">
+        <div class="panel"><h2>Reviews</h2><div id="reviews-list" class="muted small">Loading…</div></div>
+      </div>
+
+      <div id="admin-questions" class="hidden">
+        <div class="panel"><h2>Questions</h2><div id="questions-list" class="muted small">Loading…</div></div>
+      </div>
+
+      <div id="admin-requests" class="hidden">
+        <div class="panel"><h2>Requests</h2><div id="requests-list" class="muted small">Loading…</div></div>
+      </div>
+    </section>
+
     <!-- SETTINGS -->
+    <!-- (owner settings panel is shown only to the owner account) -->
     <section class="view" id="view-settings" data-title="Settings">
       <div class="panel">
         <h2>Goals and units</h2>
@@ -166,6 +234,21 @@
         <label class="field">Units<select id="set-units"><option value="km">Kilometres</option><option value="mi">Miles</option></select></label>
         <label class="toggle"><input type="checkbox" id="set-autopause"> Auto-pause by default</label>
       </div>
+      <div class="panel hidden" id="owner-panel">
+        <h2>Owner settings</h2>
+        <p class="muted small">Switch owner tabs on or off, and choose the weather place.</p>
+        <div id="module-toggles"></div>
+        <h2 style="margin-top:16px">Weather place</h2>
+        <label class="field">Name<input id="wx-name" maxlength="60"></label>
+        <label class="field">Latitude<input id="wx-lat" type="number" step="0.01"></label>
+        <label class="field">Longitude<input id="wx-lon" type="number" step="0.01"></label>
+        <div class="row">
+          <button class="btn" type="button" id="wx-use-gps">Use my location</button>
+          <button class="btn primary grow" type="button" id="wx-save">Save place</button>
+        </div>
+        <div class="admin-msg" id="wx-msg"></div>
+      </div>
+
       <div class="panel">
         <h2>Theme</h2>
         <label class="field">Appearance<select id="set-theme"><option value="system">Match system</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
@@ -200,11 +283,18 @@
     <button class="tab" data-tab="study"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="13" rx="3"/><path d="M8 10h8M8 14h5"/></svg><span>Study</span></button>
     <button class="tab" data-tab="quiz"><svg viewBox="0 0 24 24"><path d="M9 9a3 3 0 1 1 4 2.8c-.7.3-1 .9-1 1.7V15"/><circle cx="12" cy="18" r=".6"/></svg><span>Quiz</span></button>
     <button class="tab" data-tab="rides"><svg viewBox="0 0 24 24"><path d="M5 19V9M12 19V5M19 19v-7"/></svg><span>Rides</span></button>
+    <button class="tab hidden" data-tab="today"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M5 19l1.5-1.5M17.5 6.5 19 5"/></svg><span>Today</span></button>
+    <button class="tab hidden" data-tab="timetable"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="15" rx="3"/><path d="M4 10h16M9 3v4M15 3v4"/></svg><span>School</span></button>
+    <button class="tab hidden" data-tab="admin"><svg viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 4.5 3.4 8 8 9 4.6-1 8-4.5 8-9V6z"/><path d="M9 12l2 2 4-4"/></svg><span>Admin</span></button>
     <button class="tab" data-tab="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg><span>Settings</span></button>
   </nav>
 
   <script src="data/config.js"></script>
   <script src="data/content.js"></script>
   <script src="app.js"></script>
+  <script src="js/admin.js"></script>
+  <script src="js/timetable.js"></script>
+  <script src="js/briefing.js"></script>
+  <script src="js/today.js"></script>
 </body>
 </html>
