@@ -103,6 +103,7 @@
 
     <!-- STUDY -->
     <section class="view" id="view-study" data-title="Study">
+      <div class="banner" id="study-banner"></div>
       <div class="panel">
         <div class="head"><h2 id="study-progress-label"></h2><small class="muted" id="study-topic"></small></div>
         <div class="meter"><div id="study-bar" class="meter-fill"></div></div>
@@ -131,7 +132,8 @@
     </section>
 
     <!-- QUIZ -->
-    <section class="view" id="view-quiz" data-title="Cycling quiz">
+    <section class="view" id="view-quiz" data-title="Test quiz">
+      <div class="banner" id="quiz-banner"></div>
       <div class="panel">
         <div class="head"><h2 id="quiz-progress"></h2><small class="muted" id="quiz-score"></small></div>
         <div class="meter"><div id="quiz-bar" class="meter-fill"></div></div>
@@ -163,13 +165,20 @@
         <h2>Theme</h2>
         <label class="field">Appearance<select id="set-theme"><option value="system">Match system</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
       </div>
-      <div class="panel">
+      <div class="panel" id="account-panel">
         <h2>Account</h2>
         <p class="muted small" id="set-role"></p>
+        <form id="signin-form" class="signin">
+          <label class="field">Email<input type="email" id="si-email" autocomplete="username" required></label>
+          <label class="field">Password<input type="password" id="si-password" autocomplete="current-password" required></label>
+          <button class="btn primary wide" type="submit" id="si-submit">Sign in</button>
+          <p class="small" id="si-error" role="alert"></p>
+        </form>
+        <button class="btn wide hidden" id="signout-btn">Sign out</button>
       </div>
       <div class="panel">
         <h2>Backup</h2>
-        <p class="muted small">Data stays in this browser. Export a file to keep it safe or move it to another device.</p>
+        <p class="muted small">Study and quiz content comes from your Supabase account after you sign in. Rides and progress stay in this browser. Export a file to keep them safe.</p>
         <div class="row">
           <button class="btn grow" id="export-btn">Export backup</button>
           <label class="btn grow file">Import backup<input type="file" id="import-file" accept="application/json" hidden></label>
@@ -189,6 +198,7 @@
     <button class="tab" data-tab="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg><span>Settings</span></button>
   </nav>
 
+  <script src="data/config.js"></script>
   <script src="data/content.js"></script>
   <script src="app.js"></script>
 </body>
