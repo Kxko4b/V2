@@ -1,6 +1,6 @@
 /* Offline support: caches the app shell so it opens without a connection. */
-const CACHE = 'kb5-v2';
-const SHELL = ['./', './index.html', './styles.css', './app.js', './data/content.js', './manifest.json', './icon.svg'];
+const CACHE = 'kb5-v8';
+const SHELL = ['./', './index.html', './styles.css', './app.js', './data/content.js', './data/config.js', './manifest.json', './icon.svg', './js/admin.js', './js/timetable.js', './js/today.js', './js/briefing.js'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
