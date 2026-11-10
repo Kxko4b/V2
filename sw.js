@@ -1,5 +1,5 @@
 /* Offline support: caches the app shell so it opens without a connection. */
-const CACHE = 'kb5-v1';
+const CACHE = 'kb5-v2';
 const SHELL = ['./', './index.html', './styles.css', './app.js', './data/content.js', './manifest.json', './icon.svg'];
 
 self.addEventListener('install', (e) => {
