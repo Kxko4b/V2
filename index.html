@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#080b10">
+  <title>Kxko Brief V2</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%232ec4b6'/><text x='50' y='68' font-size='58' text-anchor='middle' fill='%2303211e' font-family='sans-serif' font-weight='700'>K</text></svg>">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Kxko Brief">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div class="brand"><span class="dot"></span> Kxko Brief</div>
+      <span id="clock" class="muted small"></span>
+    </header>
+
+    <!-- HOME -->
+    <section id="view-home" class="view active">
+      <p class="muted" id="greeting"></p>
+      <h1>Your week</h1>
+
+      <div class="card highlight row gap">
+        <div class="ring-wrap">
+          <svg viewBox="0 0 160 160" class="ring">
+            <circle cx="80" cy="80" r="66" class="ring-track"/>
+            <circle id="ring-arc" cx="80" cy="80" r="66" class="ring-arc"/>
+          </svg>
+          <div class="ring-center">
+            <div class="big" id="week-km">0</div>
+            <div class="muted small">of 100 km</div>
+          </div>
+        </div>
+        <div class="col gap-s">
+          <div><div class="label">Rides</div><div class="value" id="week-rides">0</div></div>
+          <div><div class="label">Time</div><div class="value" id="week-time">0:00</div></div>
+          <div><div class="label">Climb</div><div class="value" id="week-climb">0 m</div></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="section-title">Last 7 days · km</div>
+        <div class="bars" id="bars"></div>
+      </div>
+
+      <div class="grid-2">
+        <div class="card" id="last-ride-card">
+          <div class="section-title">Last ride</div>
+          <div id="last-ride" class="muted">No rides yet. Your first one will show up here.</div>
+        </div>
+
+        <button class="card clickable" data-goto="study">
+          <div class="section-title">Study</div>
+          <div id="study-status" class="value-s"></div>
+          <div class="muted small">Tap to practise</div>
+        </button>
+      </div>
+
+      <button class="btn primary wide" data-goto="ride">Start a ride</button>
+    </section>
+
+    <!-- RIDE -->
+    <section id="view-ride" class="view">
+      <div id="ride-idle" class="ride-idle">
+        <h1>Ready to ride</h1>
+        <p class="muted">GPS tracks distance, speed and climb. Keep this tab open while riding. Works best on your phone over HTTPS.</p>
+        <button id="start-btn" class="start-orb" aria-label="Start ride"><span>START</span></button>
+        <p class="muted small" id="gps-note"></p>
+      </div>
+
+      <div id="ride-active" class="hidden">
+        <div class="status-row">
+          <span id="rec-dot" class="rec-dot"></span>
+          <span id="rec-label" class="rec-label">RECORDING</span>
+        </div>
+        <div class="timer" id="timer">00:00</div>
+        <div class="speed-row"><span class="speed" id="speed">0.0</span><span class="muted unit">km/h</span></div>
+        <div class="tiles">
+          <div class="tile"><div class="label">Distance</div><div class="value-s"><span id="dist">0.00</span> <small>km</small></div></div>
+          <div class="tile"><div class="label">Avg</div><div class="value-s"><span id="avg">0.0</span> <small>km/h</small></div></div>
+          <div class="tile"><div class="label">Climb</div><div class="value-s"><span id="climb">0</span> <small>m</small></div></div>
+        </div>
+        <canvas id="live-route" class="route"></canvas>
+        <div class="row gap">
+          <button id="pause-btn" class="btn ghost grow">Pause</button>
+          <button id="finish-btn" class="btn ghost danger grow">Finish</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- STUDY -->
+    <section id="view-study" class="view">
+      <h1>Study</h1>
+      <div class="progress"><div id="study-bar" class="progress-fill"></div></div>
+      <div class="muted small" id="study-count"></div>
+
+      <div id="flash-wrap">
+        <div id="flash" class="flash" role="button" tabindex="0">
+          <div class="flash-inner">
+            <div class="label" id="flash-label">QUESTION</div>
+            <div id="flash-text" class="flash-text"></div>
+            <div class="muted small" id="flash-hint">Tap to reveal</div>
+          </div>
+        </div>
+      </div>
+
+      <div id="flash-actions">
+        <button id="show-btn" class="btn primary wide">Show answer</button>
+        <div id="grade-btns" class="row gap hidden">
+          <button id="again-btn" class="btn ghost danger grow">Again</button>
+          <button id="gotit-btn" class="btn primary grow">Got it</button>
+        </div>
+      </div>
+      <p class="muted small">Got it moves a card up. Again sends it back to the start. Cards you miss come back sooner.</p>
+    </section>
+
+    <!-- HISTORY -->
+    <section id="view-history" class="view">
+      <h1>History</h1>
+      <div class="tiles">
+        <div class="tile"><div class="label">Rides</div><div class="value-s" id="h-count">0</div></div>
+        <div class="tile"><div class="label">Distance</div><div class="value-s"><span id="h-km">0.0</span> <small>km</small></div></div>
+        <div class="tile"><div class="label">Climb</div><div class="value-s"><span id="h-climb">0</span> <small>m</small></div></div>
+      </div>
+      <div class="muted small" id="h-total"></div>
+      <div id="ride-list"></div>
+    </section>
+  </main>
+
+  <nav class="bottomnav" aria-label="Main">
+    <button class="nav-item active" data-tab="home"><span class="glyph">◉</span><span>Home</span></button>
+    <button class="nav-item" data-tab="ride"><span class="glyph">↗</span><span>Ride</span></button>
+    <button class="nav-item" data-tab="study"><span class="glyph">✎</span><span>Study</span></button>
+    <button class="nav-item" data-tab="history"><span class="glyph">≡</span><span>History</span></button>
+  </nav>
+
+  <script src="app.js"></script>
+</body>
+</html>
