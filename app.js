@@ -63,7 +63,11 @@
     $('#page-title').textContent = $(`#view-${tab}`).dataset.title;
     history.replaceState(null, '', `#${tab}`);
     try { window.scrollTo(0, 0); } catch { /* ignore */ }
-    const renders = { dashboard: renderDashboard, study: renderStudy, quiz: () => (quiz.questions.length ? renderQuiz() : startQuiz()), rides: renderRides, settings: renderSettings, ride: renderRideIdle };
+    if (tab === 'admin' && !isAdminUser()) tab = 'dashboard';
+    if (tab === 'timetable' && !canSeeTimetable()) tab = 'dashboard';
+    if (tab === 'today' && !canSeeToday()) tab = 'dashboard';
+    currentTab = tab;
+    const renders = { admin: () => window.KB_ADMIN?.refresh(), timetable: () => window.KB_TIMETABLE?.refresh(), today: () => window.KB_TODAY?.refresh(), dashboard: renderDashboard, study: renderStudy, quiz: () => (quiz.questions.length ? renderQuiz() : startQuiz()), rides: renderRides, settings: renderSettings, ride: renderRideIdle };
     try { renders[tab]?.(); } catch (err) { console.error('Kxko: could not draw', tab, err); }
     if (tab !== 'quiz') stopQuizTimer();
   }
@@ -471,7 +475,42 @@
   }
 
   // ---------- settings & backup ----------
+  function renderOwnerSettings() {
+    const panel = $('#owner-panel');
+    if (!panel) return;
+    panel.classList.toggle('hidden', !isOwner());
+    if (!isOwner()) return;
+    $('#module-toggles').innerHTML = CFG.modules.map((m) => `
+      <label class="toggle"><input type="checkbox" data-module-toggle="${esc(m.key)}" ${moduleOn(m.key) ? 'checked' : ''}> ${esc(m.label)}</label>`).join('');
+    const w = weatherPlace();
+    $('#wx-name').value = w.name || ''; $('#wx-lat').value = w.lat ?? ''; $('#wx-lon').value = w.lon ?? '';
+  }
+
+  $('#module-toggles').addEventListener('change', (e) => {
+    const key = e.target.dataset.moduleToggle;
+    if (key) setModule(key, e.target.checked);
+  });
+  $('#wx-save').addEventListener('click', () => {
+    const lat = Number($('#wx-lat').value), lon = Number($('#wx-lon').value);
+    const msg = $('#wx-msg');
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
+      msg.textContent = 'Enter a valid latitude (-90 to 90) and longitude (-180 to 180).'; msg.className = 'admin-msg bad'; return;
+    }
+    setWeatherPlace({ name: $('#wx-name').value.trim() || 'My place', lat, lon });
+    msg.textContent = 'Saved.'; msg.className = 'admin-msg ok';
+    window.KB_TODAY?.refresh();
+  });
+  $('#wx-use-gps').addEventListener('click', () => {
+    const msg = $('#wx-msg');
+    if (!navigator.geolocation) { msg.textContent = 'This browser cannot get your location.'; msg.className = 'admin-msg bad'; return; }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => { $('#wx-lat').value = pos.coords.latitude.toFixed(2); $('#wx-lon').value = pos.coords.longitude.toFixed(2); msg.textContent = 'Location filled in. Name it, then save.'; msg.className = 'admin-msg ok'; },
+      (err) => { msg.textContent = `Could not get location: ${err.message}`; msg.className = 'admin-msg bad'; }
+    );
+  });
+
   function renderSettings() {
+    renderOwnerSettings();
     const s = settings();
     $('#set-goal').value = s.goalKm; $('#set-units').value = s.units; $('#set-autopause').checked = s.autoPause;
     $('#set-theme').value = s.theme;
@@ -565,6 +604,7 @@
     const data = await sbFetch('/auth/v1/token?grant_type=password', { method: 'POST', body: { email: email.trim(), password }, token: SB.key });
     if (!data?.access_token) throw new Error('Sign-in did not return a session.');
     saveSession(data, email.trim());
+    refreshAdminTab();
   }
 
   function signOut() {
@@ -699,7 +739,38 @@
       </div>`).join('');
   }
 
+  // Owner access and module switches come from data/config.js and the Settings toggles (no hard-coded emails).
+  const CFG = window.KB_CONFIG || { ownerEmail: '', weather: { name: '', lat: 0, lon: 0 }, modules: [] };
+  const MODULES_KEY = 'kb5.modules';
+  const WEATHER_KEY = 'kb5.weather';
+  const isOwner = () => Boolean(CFG.ownerEmail) && (sbSession()?.email || '').toLowerCase() === CFG.ownerEmail.toLowerCase();
+  const moduleOn = (key) => isOwner() && read(MODULES_KEY, {})[key] !== false;
+  const setModule = (key, on) => { const m = read(MODULES_KEY, {}); m[key] = on; write(MODULES_KEY, m); refreshAdminTab(); };
+  const weatherPlace = () => ({ ...CFG.weather, ...read(WEATHER_KEY, {}) });
+  const setWeatherPlace = (p) => write(WEATHER_KEY, p);
+
+  const isAdminUser = () => moduleOn('admin');
+  const canSeeTimetable = () => moduleOn('timetable');
+  const canSeeToday = () => moduleOn('today');
+
+  function refreshAdminTab() {
+    document.querySelector('[data-tab="admin"]')?.classList.toggle('hidden', !isAdminUser());
+    document.querySelector('[data-tab="timetable"]')?.classList.toggle('hidden', !canSeeTimetable());
+    document.querySelector('[data-tab="today"]')?.classList.toggle('hidden', !canSeeToday());
+    if (!isAdminUser() && currentTab === 'admin') go('dashboard');
+    if (!canSeeTimetable() && currentTab === 'timetable') go('dashboard');
+    if (!canSeeToday() && currentTab === 'today') go('dashboard');
+  }
+
+  // Shared API for the admin module (js/admin.js). Uses the same login and refresh logic.
+  async function ensureFresh() {
+    const s = sbSession();
+    if (s?.refresh_token && s.expires_at - Date.now() < 60000) await refreshSession();
+  }
+  window.kbApi = { call: sbCall, ensureFresh, session: sbSession, SB, esc, isOwner, moduleOn, setModule, weatherPlace, setWeatherPlace, modules: () => CFG.modules, ownerEmail: () => CFG.ownerEmail };
+
   function renderAccount() {
+    refreshAdminTab();
     const s = sbSession();
     $('#set-role').textContent = s?.access_token
       ? `Signed in as ${s.email || 'your account'}. Your upcoming tests load into Study and Quiz.`
@@ -761,6 +832,7 @@
   try { applyTheme(); } catch (err) { console.error('Kxko: theme', err); }
   loadLive();
   syncRides();
+  refreshAdminTab();
   const initial = location.hash.replace('#', '');
   go(initial || 'dashboard');
 })();
