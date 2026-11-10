@@ -207,3 +207,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .signin { margin-top: 6px; }
 .signin .btn.wide { margin-top: 4px; }
 .small.error { color: var(--bad); }
+
+.test-row { display: grid; grid-template-columns: 64px 1fr auto; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.test-row:last-child { border-bottom: 0; }
+.test-date { font: 700 15px var(--head); color: var(--lime); }
+.test-main b { font-weight: 600; }
+.test-count { font-size: 12.5px; font-weight: 600; color: var(--lime); white-space: nowrap; }
+.test-count.none { color: var(--dim); }
