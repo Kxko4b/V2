@@ -157,7 +157,11 @@
     try {
       const rows = await api().call('/rest/v1/requests?select=id,name,email,type,size,description,status,price_offer,request_code,created_at&order=created_at.desc');
       if (!rows.length) { box.textContent = 'No requests yet.'; return; }
-      box.innerHTML = rows.map((r) => {
+      const counts = {};
+      rows.forEach((r) => { const k = r.status || 'Pending'; counts[k] = (counts[k] || 0) + 1; });
+      const statTiles = [['All', rows.length], ...REQUEST_STATUSES.map((s) => [s, counts[s] || 0])]
+        .map(([label, n]) => `<div class="biz-stat"><span>${esc(label)}</span><b>${n}</b></div>`).join('');
+      box.innerHTML = `<div class="biz-stats">${statTiles}</div>` + rows.map((r) => {
         const statuses = [...new Set([r.status || 'Pending', ...REQUEST_STATUSES])];
         const types = [...new Set([r.type || 'Diagram', ...REQUEST_TYPES])];
         return `
