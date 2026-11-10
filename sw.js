@@ -1,22 +1,29 @@
-/* Offline support: caches the app shell so it opens without a connection. */
-const CACHE = 'kb5-v8';
-const SHELL = ['./', './index.html', './styles.css', './app.js', './data/content.js', './data/config.js', './manifest.json', './icon.svg', './js/admin.js', './js/timetable.js', './js/today.js', './js/briefing.js'];
+/* Offline support. Network first: a fresh copy is used whenever the phone is online,
+   and the cache is only the fallback. A missing file never stops the service worker from installing. */
+const CACHE = 'kb5-v10';
+const SHELL = ['./', './index.html', './styles.css', './app.js', './data/config.js', './data/content.js',
+  './admin.js', './timetable.js', './today.js', './briefing.js', './manifest.json', './icon.svg'];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then((c) =>
+    Promise.allSettled(SHELL.map((url) => c.add(url).catch(() => null)))
+  ).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
-  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim()));
+  e.waitUntil(caches.keys().then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
+    .then(() => self.clients.claim()));
 });
 
 self.addEventListener('fetch', (e) => {
   if (e.request.method !== 'GET' || new URL(e.request.url).origin !== location.origin) return;
   e.respondWith(
-    caches.match(e.request).then((hit) => hit || fetch(e.request).then((res) => {
-      const copy = res.clone();
-      caches.open(CACHE).then((c) => c.put(e.request, copy));
+    fetch(e.request).then((res) => {
+      if (res.ok) {
+        const copy = res.clone();
+        caches.open(CACHE).then((c) => c.put(e.request, copy));
+      }
       return res;
-    }).catch(() => caches.match('./index.html')))
+    }).catch(() => caches.match(e.request).then((hit) => hit || caches.match('./index.html')))
   );
 });
