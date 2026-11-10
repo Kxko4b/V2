@@ -1,5 +1,5 @@
-/* Briefing panel for the Today tab: latest briefing, the run log with every check, repair and AI message,
-   and a retry button. Owner only; the database and the retry function enforce access. */
+/* Briefing diagnostics (Today tab, owner only). Pick a run to see what was checked, what was sent to the
+   watch, what the AI reviewer said, and force a retry when something went wrong. */
 (() => {
   'use strict';
 
@@ -13,142 +13,163 @@
     degraded: { text: 'Needs attention', cls: 'warn' },
     failed: { text: 'Failed', cls: 'bad' },
   };
-  const KIND = { check: 'Check', repair: 'Repair', ai: 'AI message', escalation: 'Needs you' };
+  const KIND = { check: 'Check', repair: 'Repair', ai: 'AI reviewer', escalation: 'Needs you' };
   const OUTCOME = { ok: 'OK', fixed: 'Fixed automatically', reported: 'Reported', stopped: 'Stopped' };
 
   let runs = [];
-  let openRunId = null;
+  const eventCache = {};
+  let selectedId = null;
 
-  const fmtTime = (iso) => new Date(iso).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  const when = (iso) => new Date(iso).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  const badge = (status) => { const s = STATUS[status] || { text: status, cls: '' }; return `<span class="bl-badge ${s.cls}">${esc(s.text)}</span>`; };
 
-  // Plain-language summary of what changed.
-  function changeSummary(events) {
-    const fixes = events.filter((e) => e.outcome === 'fixed');
-    const aiMessages = events.filter((e) => e.kind === 'ai');
-    const stopped = events.filter((e) => e.outcome === 'stopped');
-    if (fixes.length) return { cls: 'ok', text: `Changed automatically: ${fixes.length} fix${fixes.length > 1 ? 'es' : ''}. The AI reviewer only recommends; the fixes come from safe rules.` };
-    if (stopped.length) return { cls: 'bad', text: `Not fixed. ${stopped.length} problem${stopped.length > 1 ? 's' : ''} need${stopped.length > 1 ? '' : 's'} you.` };
-    if (aiMessages.length) return { cls: 'warn', text: 'Nothing was changed. The AI reviewer left a message below.' };
-    return { cls: 'ok', text: 'Nothing needed changing.' };
+  async function eventsFor(runId) {
+    if (!eventCache[runId]) {
+      eventCache[runId] = await api().call(`/rest/v1/briefing_events?select=id,created_at,kind,component,severity,outcome,found,action,details&run_id=eq.${runId}&order=created_at.asc`);
+    }
+    return eventCache[runId];
   }
 
-  function eventCard(e) {
+  // Plain-language sentence: what went wrong, or that nothing did.
+  function explain(run, events) {
+    const bad = events.filter((e) => e.outcome === 'stopped' || e.outcome === 'reported');
+    const fixed = events.filter((e) => e.outcome === 'fixed');
+    if (!bad.length && !fixed.length) return { cls: 'ok', text: 'Everything worked. Nothing needed fixing or reporting.' };
+    const parts = [];
+    if (fixed.length) parts.push(`${fixed.length} problem${fixed.length > 1 ? 's were' : ' was'} fixed automatically`);
+    bad.forEach((e) => parts.push(`${e.component}: ${e.found}`));
+    return { cls: bad.length ? (run.status === 'failed' ? 'bad' : 'warn') : 'ok', text: parts.join('. ') + '.' };
+  }
+
+  function eventRow(e) {
     const kind = KIND[e.kind] || e.kind;
-    const outcome = OUTCOME[e.outcome] || e.outcome;
     return `
-      <div class="bl-event ${esc(e.outcome)}">
-        <div class="bl-meta"><span class="bl-kind">${esc(kind)}</span> <span class="muted small">· ${esc(e.component)} · ${esc(e.severity)} · ${esc(outcome)}</span></div>
+      <div class="bl-event ${esc(e.outcome)} ${e.kind === 'ai' ? 'ai' : ''}">
+        <div class="bl-meta"><span class="bl-kind">${esc(kind)}</span>
+          <span class="muted small"> · ${esc(e.component)} · ${esc(OUTCOME[e.outcome] || e.outcome)} · ${esc(e.severity)}</span></div>
         <div class="bl-found">${esc(e.found || '')}</div>
         ${e.action ? `<div class="bl-action">${esc(e.action)}</div>` : ''}
       </div>`;
   }
 
-  async function loadEvents(runId) {
-    return api().call(`/rest/v1/briefing_events?select=id,created_at,kind,component,severity,outcome,found,action&run_id=eq.${runId}&order=created_at.asc`);
-  }
-
-  async function renderLatest() {
-    const box = $('#today-briefing');
-    const latest = runs[0];
-    if (!latest) { box.textContent = 'No briefing yet.'; return; }
-    const st = STATUS[latest.status] || { text: latest.status, cls: '' };
-    let events = [];
-    try { events = await loadEvents(latest.id); } catch (err) { events = []; }
-    const summary = changeSummary(events);
-    const needsRetry = latest.status === 'degraded' || latest.status === 'failed';
-
-    box.innerHTML = `
-      <div class="bl-head">
-        <span class="bl-badge ${st.cls}">${esc(st.text)}</span>
-        <span class="muted small">${esc(fmtTime(latest.run_at))} · push ${latest.push_sent ? 'sent' : 'not sent'}</span>
-      </div>
-      <div class="bl-summary ${summary.cls}">${esc(summary.text)}</div>
-      <div class="muted small">${esc(latest.summary || '')}</div>
-      ${needsRetry ? `
-        <div class="bl-retry">
-          <button class="btn primary" id="bl-retry">Try again with the AI reviewer</button>
-          <div class="admin-msg" id="bl-retry-msg"></div>
-        </div>` : ''}
-      <div class="bl-section"><div class="bl-title">What the checks found</div>
-        ${events.length ? events.map(eventCard).join('') : '<div class="muted small">No checks were logged for this run.</div>'}
-      </div>
-      <div class="bl-section"><div class="bl-title">Briefing text</div>
-        <div class="briefing">${renderText(latest.briefing)}</div>
+  function componentRow(c) {
+    const ok = c.success;
+    const retried = c.recovered ? ` · recovered on attempt ${c.attempts}` : (c.attempts > 1 ? ` · ${c.attempts} attempts` : '');
+    return `
+      <div class="bl-source ${ok ? 'ok' : 'bad'}">
+        <span class="bl-dot"></span>
+        <div class="bl-grow"><strong>${esc(c.name)}</strong><div class="muted small">${ok ? 'OK' : esc(c.error || 'failed')}${esc(retried)}</div></div>
       </div>`;
   }
 
-  function renderText(text) {
-    return String(text || '').split('\n').map((raw) => {
-      const line = raw.trimEnd();
-      if (!line.trim()) return '<div class="br-gap"></div>';
-      const head = /^[A-ZÄÖÜ][A-ZÄÖÜ \/&-]{2,}$/.test(line.trim());
-      return head ? `<div class="br-head">${esc(line.trim())}</div>` : `<div class="br-line">${esc(line)}</div>`;
+  async function renderRun(run) {
+    const box = $('#bl-body');
+    box.innerHTML = '<div class="muted small">Loading this run…</div>';
+    let events = [];
+    try { events = await eventsFor(run.id); } catch (err) { box.innerHTML = `<p class="bad small">Could not load the log: ${esc(err.message)}</p>`; return; }
+
+    const ex = explain(run, events);
+    const fixed = events.filter((e) => e.outcome === 'fixed').length;
+    const stopped = events.filter((e) => e.outcome === 'stopped').length;
+    const reported = events.filter((e) => e.outcome === 'reported').length;
+    const comps = Array.isArray(run.components) ? run.components : [];
+    const needsRetry = run.status === 'degraded' || run.status === 'failed';
+    const sentText = run.briefing || '';
+
+    box.innerHTML = `
+      <div class="bl-summary ${ex.cls}">${esc(ex.text)}</div>
+
+      <div class="bl-tiles">
+        <div class="bl-tile"><span>Fixed automatically</span><b>${fixed}</b></div>
+        <div class="bl-tile"><span>Stopped for you</span><b>${stopped}</b></div>
+        <div class="bl-tile"><span>Reported</span><b>${reported}</b></div>
+      </div>
+
+      <div class="bl-block">
+        <div class="bl-title">Notification on your watch</div>
+        <div class="bl-row muted small">
+          <span>Title: Kxko Daily Briefing</span>
+          <span>${run.push_sent ? 'Sent to the phone and watch' : 'Not sent'}</span>
+        </div>
+        <pre class="bl-text">${esc(sentText || '(empty)')}</pre>
+        ${run.push_sent ? '' : '<p class="muted small">Nothing reached the watch for this run.</p>'}
+      </div>
+
+      <div class="bl-block">
+        <div class="bl-title">Self-check and AI activity</div>
+        ${events.length ? events.map(eventRow).join('') : '<p class="muted small">The self-check found nothing to fix or report for this run.</p>'}
+      </div>
+
+      <div class="bl-block">
+        <div class="bl-title">Data sources</div>
+        ${comps.length ? comps.map(componentRow).join('') : '<p class="muted small">No data source details stored for this run.</p>'}
+      </div>
+
+      ${needsRetry ? `
+        <div class="bl-block bl-force">
+          <div class="bl-title">Force a fix</div>
+          <p class="muted small">Runs the whole briefing again with its safe repairs and the AI review. The same text is not sent to the watch twice.</p>
+          <button class="btn primary" id="bl-retry">Force fix now</button>
+          <div class="admin-msg" id="bl-retry-msg"></div>
+        </div>` : ''}`;
+  }
+
+  function renderSelect() {
+    const sel = $('#bl-select');
+    sel.innerHTML = runs.map((r) => {
+      const s = STATUS[r.status] || { text: r.status };
+      return `<option value="${esc(r.id)}" ${r.id === selectedId ? 'selected' : ''}>${esc(when(r.run_at))} — ${esc(s.text)}</option>`;
     }).join('');
   }
 
-  function renderLog() {
-    const box = $('#today-briefing-history');
-    if (runs.length < 2) { box.innerHTML = ''; return; }
-    box.innerHTML = `<div class="bl-title">Run log</div>` + runs.map((r) => {
-      const st = STATUS[r.status] || { text: r.status, cls: '' };
-      return `
-        <div class="bl-run" data-run="${esc(r.id)}">
-          <div class="bl-run-row">
-            <span>${esc(fmtTime(r.run_at))}</span>
-            <span class="bl-badge ${st.cls}">${esc(st.text)}</span>
-          </div>
-          <div class="muted small">${esc(r.summary || '')}</div>
-          <div class="bl-run-events" id="run-events-${esc(r.id)}"></div>
-        </div>`;
-    }).join('');
-  }
-
-  async function toggleRun(id) {
-    const box = $(`#run-events-${id}`);
-    if (!box) return;
-    if (openRunId === id) { box.innerHTML = ''; openRunId = null; return; }
-    openRunId = id;
-    box.textContent = 'Loading…';
-    try {
-      const events = await loadEvents(id);
-      box.innerHTML = events.length ? events.map(eventCard).join('') : '<div class="muted small">No checks logged.</div>';
-    } catch (err) { box.textContent = err.message; }
+  async function show(id) {
+    selectedId = id;
+    const run = runs.find((r) => String(r.id) === String(id));
+    if (!run) return;
+    renderSelect();
+    $('#bl-head').innerHTML = `${badge(run.status)} <span class="muted small">${esc(when(run.run_at))} · ${run.push_sent ? 'notification sent' : 'no notification'}</span>`;
+    await renderRun(run);
   }
 
   async function retry() {
     const btn = $('#bl-retry'), msg = $('#bl-retry-msg');
     btn.disabled = true;
-    msg.textContent = 'Running the briefing again… this can take a minute.'; msg.className = 'admin-msg ok';
+    msg.textContent = 'Running the briefing again. This can take a minute…'; msg.className = 'admin-msg ok';
     try {
       await api().ensureFresh();
       const res = await api().call('/functions/v1/briefing-retry', { method: 'POST', body: {} });
-      if (res?.success === false) throw new Error(res.error || 'Retry failed');
-      msg.textContent = `Done. Status: ${res.status || res.selfCheck?.status || 'checked'}.`;
-      msg.className = 'admin-msg ok';
+      if (res?.success === false) throw new Error(res.error || 'The retry failed.');
+      msg.textContent = `Done. New status: ${res.status || res.selfCheck?.status || 'checked'}.`; msg.className = 'admin-msg ok';
+      Object.keys(eventCache).forEach((k) => delete eventCache[k]);
       await refresh(true);
     } catch (err) {
       msg.textContent = err.message; msg.className = 'admin-msg bad';
     } finally { btn.disabled = false; }
   }
 
-  async function refresh(force = false) {
+  async function refresh(keepSelection = false) {
     if (!window.KB_TODAY?.canSee?.()) return;
     const box = $('#today-briefing');
-    if (!force) box.textContent = 'Loading briefing…';
+    if (!keepSelection) box.textContent = 'Loading briefing…';
     try {
-      runs = await api().call('/rest/v1/briefing_runs?select=id,run_at,date_key,status,summary,briefing,push_sent&order=run_at.desc&limit=14');
-      await renderLatest();
-      renderLog();
+      runs = await api().call('/rest/v1/briefing_runs?select=id,run_at,date_key,status,summary,briefing,push_sent,components&order=run_at.desc&limit=30');
+      if (!runs.length) { box.textContent = 'No briefing runs yet.'; return; }
+      if (!keepSelection || !runs.some((r) => String(r.id) === String(selectedId))) selectedId = runs[0].id;
+      box.innerHTML = `
+        <div class="bl-pick">
+          <label class="bl-label" for="bl-select">Run</label>
+          <select id="bl-select"></select>
+        </div>
+        <div id="bl-head" class="bl-head"></div>
+        <div id="bl-body"></div>`;
+      await show(selectedId);
     } catch (err) {
       box.innerHTML = `<p class="bad small">Could not load the briefing: ${esc(err.message)}</p>`;
     }
   }
 
-  document.addEventListener('click', (e) => {
-    if (e.target.closest('#bl-retry')) return retry();
-    const run = e.target.closest('.bl-run');
-    if (run && !e.target.closest('.bl-run-events')) toggleRun(run.dataset.run);
-  });
+  document.addEventListener('change', (e) => { if (e.target.id === 'bl-select') show(e.target.value); });
+  document.addEventListener('click', (e) => { if (e.target.closest('#bl-retry')) retry(); });
 
   window.KB_BRIEFING = { refresh };
 })();
