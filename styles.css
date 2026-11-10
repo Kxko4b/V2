@@ -198,3 +198,12 @@ button, input, select, textarea { font: inherit; color: inherit; }
   .records { grid-template-columns: repeat(4, 1fr); }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+.banner { border-radius: 14px; padding: 10px 14px; margin-bottom: 12px; font-size: 13.5px; border: 1px solid var(--line); background: var(--panel); }
+.banner.live { border-color: var(--lime); color: var(--text); }
+.banner.demo { color: var(--soft); }
+.banner.error { border-color: var(--bad); color: var(--bad); }
+.banner button { margin-left: 8px; }
+.signin { margin-top: 6px; }
+.signin .btn.wide { margin-top: 4px; }
+.small.error { color: var(--bad); }
