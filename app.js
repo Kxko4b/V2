@@ -1,502 +1,205 @@
-/* Kxko Brief v4 · plain JavaScript, no build step. Data stays in this browser. */
-(() => {
-  'use strict';
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0d0c">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Kxko">
+  <meta name="description" content="Kxko Brief: rides, study cards and a cycling quiz. Works offline.">
+  <title>Kxko Brief</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="shell">
+    <header class="top">
+      <div class="brand"><span class="logo">K</span><div><small id="date-line"></small><h1 id="page-title">Home</h1></div></div>
+      <button class="chip-btn" id="theme-btn" aria-label="Toggle theme">Theme</button>
+    </header>
 
-  const KM_TO_MI = 0.621371;
-  const DAY = 86_400_000;
-  const MAX_ACCURACY_M = 25, MIN_STEP_M = 2, MIN_CLIMB_M = 0.8;
-  const STOP_SPEED_MPS = 0.8, STOP_AFTER_SEC = 8;
-  const MAX_BOX = 5, QUIZ_SECONDS = 15;
-  const K = { rides: 'kb4.rides', study: 'kb4.study', settings: 'kb4.settings' };
-
-  const $ = (s) => document.querySelector(s);
-  const $$ = (s) => [...document.querySelectorAll(s)];
-  const read = (k, f) => { try { return JSON.parse(localStorage.getItem(k)) ?? f; } catch { return f; } };
-  const write = (k, v) => localStorage.setItem(k, JSON.stringify(v));
-  const pad = (n) => String(n).padStart(2, '0');
-  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
-  const defaults = { goalKm: 100, units: 'km', autoPause: false, theme: 'system' };
-  const settings = () => ({ ...defaults, ...read(K.settings, {}) });
-  const saveSettings = (p) => write(K.settings, { ...settings(), ...p });
-  const rides = () => read(K.rides, []).sort((a, b) => b.startMs - a.startMs);
-  const saveRides = (list) => write(K.rides, list);
-  const content = window.KB_CONTENT || { study: [], cycling: [] };
-
-  const fmtTime = (sec) => { const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60; return h ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`; };
-  const unit = () => settings().units;
-  const toDisp = (m) => (unit() === 'mi' ? m / 1000 * KM_TO_MI : m / 1000);
-  const fmtDist = (m, d = 1) => toDisp(m).toFixed(d);
-  const fmtSpeed = (mps) => (mps * 3.6 * (unit() === 'mi' ? KM_TO_MI : 1)).toFixed(1);
-  const speedUnit = () => (unit() === 'mi' ? 'mph' : 'km/h');
-  const dayKey = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; };
-  const startOfDay = (ms) => { const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime(); };
-  const haversine = (a, b) => {
-    const R = 6_371_000, r = (d) => d * Math.PI / 180;
-    const dLat = r(b.lat - a.lat), dLon = r(b.lon - a.lon);
-    const h = Math.sin(dLat / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(b.lat)) * Math.sin(dLon / 2) ** 2;
-    return 2 * R * Math.asin(Math.sqrt(h));
-  };
-
-  // ---------- theme ----------
-  function applyTheme() {
-    const pref = settings().theme;
-    const dark = pref === 'dark' || (pref === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
-    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
-    document.querySelector('meta[name="theme-color"]').content = dark ? '#0b0d0c' : '#f4f6f3';
-    $('#set-theme').value = pref;
-  }
-  $('#theme-btn').addEventListener('click', () => {
-    const dark = document.documentElement.dataset.theme === 'dark';
-    saveSettings({ theme: dark ? 'light' : 'dark' }); applyTheme();
-  });
-  $('#set-theme').addEventListener('change', (e) => { saveSettings({ theme: e.target.value }); applyTheme(); });
-  matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { if (settings().theme === 'system') applyTheme(); });
-
-  // ---------- navigation ----------
-  let currentTab = 'dashboard';
-  function go(tab) {
-    if (!$(`#view-${tab}`)) tab = 'dashboard';
-    currentTab = tab;
-    $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${tab}`));
-    $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
-    $('#page-title').textContent = $(`#view-${tab}`).dataset.title;
-    history.replaceState(null, '', `#${tab}`);
-    window.scrollTo({ top: 0, behavior: 'instant' });
-    ({ dashboard: renderDashboard, study: renderStudy, quiz: () => (quiz.questions.length ? renderQuiz() : startQuiz()), rides: renderRides, settings: renderSettings, ride: renderRideIdle })[tab]?.();
-    if (tab !== 'quiz') stopQuizTimer();
-  }
-  $$('.tab').forEach((b) => b.addEventListener('click', () => go(b.dataset.tab)));
-  $$('[data-goto]').forEach((b) => b.addEventListener('click', () => go(b.dataset.goto)));
-
-  // ---------- dashboard ----------
-  function streakDays(list) {
-    const days = new Set(list.map((r) => dayKey(r.startMs)));
-    let cursor = Date.now(), n = 0;
-    if (!days.has(dayKey(cursor))) cursor -= DAY;
-    while (days.has(dayKey(cursor))) { n++; cursor -= DAY; }
-    return n;
-  }
-
-  function records(list) {
-    if (!list.length) return [];
-    const longest = list.reduce((a, r) => (r.distanceM > a.distanceM ? r : a));
-    const climb = list.reduce((a, r) => (r.elevGainM > a.elevGainM ? r : a));
-    const long = list.filter((r) => r.distanceM >= 5000);
-    const fastest = long.length ? long.reduce((a, r) => (r.distanceM / r.durationSec > a.distanceM / a.durationSec ? r : a)) : null;
-    const splitAll = list.flatMap((r) => (r.splits || []).map((s) => ({ ...s, ride: r })));
-    const bestSplit = splitAll.length ? splitAll.reduce((a, s) => (s.sec < a.sec ? s : a)) : null;
-    return [
-      { label: 'Longest ride', value: `${fmtDist(longest.distanceM)} ${unit()}`, note: new Date(longest.startMs).toLocaleDateString() },
-      { label: 'Most climb', value: `+${climb.elevGainM.toFixed(0)} m`, note: new Date(climb.startMs).toLocaleDateString() },
-      { label: 'Fastest avg (5 km+)', value: fastest ? `${fmtSpeed(fastest.distanceM / fastest.durationSec)} ${speedUnit()}` : '—', note: fastest ? new Date(fastest.startMs).toLocaleDateString() : 'Ride 5 km to qualify' },
-      { label: 'Best km split', value: bestSplit ? fmtTime(bestSplit.sec) : '—', note: bestSplit ? `km ${bestSplit.km}` : 'Complete a full km' }
-    ];
-  }
-
-  function renderDashboard() {
-    const s = settings(), list = rides(), now = Date.now(), d = new Date();
-    $('#date-line').textContent = d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' });
-    const h = d.getHours();
-    $('#greeting').textContent = h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
-
-    const week = list.filter((r) => now - r.startMs < 7 * DAY);
-    const weekM = week.reduce((a, r) => a + r.distanceM, 0);
-    const goalM = s.goalKm * 1000;
-    const pct = Math.min(100, Math.round(weekM / goalM * 100));
-    $('#ring-arc').style.strokeDashoffset = String(365 * (1 - pct / 100));
-    $('#ring-pct').textContent = `${pct}%`;
-    const left = Math.max(0, goalM - weekM);
-    $('#hero-line').textContent = weekM === 0 ? 'Let’s get rolling this week.'
-      : pct >= 100 ? 'Goal reached. Everything from here is a bonus.'
-      : `${fmtDist(left)} ${unit()} to go this week.`;
-    const streak = streakDays(list);
-    $('#streak').textContent = streak ? `${streak} day${streak > 1 ? 's' : ''} in a row` : 'Ride today to start a streak';
-
-    $('#w-km').textContent = fmtDist(weekM);
-    $('#w-unit').textContent = unit();
-    $('#w-rides').textContent = week.length;
-    $('#w-time').textContent = fmtTime(week.reduce((a, r) => a + r.durationSec, 0)).replace(/^00:/, '0:');
-    $('#w-climb').textContent = week.reduce((a, r) => a + r.elevGainM, 0).toFixed(0);
-    $('#bars-note').textContent = `${unit()} per day`;
-
-    const days = [...Array(7)].map((_, i) => {
-      const back = 6 - i, t = now - back * DAY, start = startOfDay(t);
-      const m = list.filter((r) => r.startMs >= start && r.startMs < start + DAY).reduce((a, r) => a + r.distanceM, 0);
-      return { v: toDisp(m), label: new Date(t).toLocaleDateString(undefined, { weekday: 'short' }), today: back === 0 };
-    });
-    const max = Math.max(1, ...days.map((x) => x.v));
-    $('#bars').innerHTML = days.map((x) => `<div class="bar-col ${x.today ? 'today' : ''}"><div class="bar" data-h="${x.v > 0 ? Math.max(6, x.v / max * 100) : 3}"></div><div class="bar-label">${esc(x.label)}</div></div>`).join('');
-    requestAnimationFrame(() => $$('.bar').forEach((b) => (b.style.height = `${b.dataset.h}%`)));
-
-    $('#records').innerHTML = list.length ? records(list).map((r) => `<div class="record"><span>${esc(r.label)}</span><b>${esc(r.value)}</b><br><small>${esc(r.note)}</small></div>`).join('')
-      : '<p class="muted small" style="margin:0">Your records appear after your first ride.</p>';
-
-    const last = list[0];
-    $('#last-ride').innerHTML = last
-      ? `<div class="head"><b style="font:700 22px var(--head)">${esc(rideTitle(last))}</b><span class="muted small">${fmtDist(last.distanceM)} ${unit()}</span></div>
-         <p class="muted small" style="margin:0">${fmtTime(last.durationSec)} · avg ${fmtSpeed(last.durationSec ? last.distanceM / last.durationSec : 0)} ${speedUnit()} · climb +${last.elevGainM.toFixed(0)} m</p>`
-      : 'No rides yet. Start one from the Ride tab.';
-  }
-
-  // ---------- ride recording ----------
-  const live = { active: false, paused: false, autoPaused: false, startMs: 0, elapsed: 0, distanceM: 0, climbM: 0, speed: 0, maxSpeed: 0, points: [], splits: [], lastSplitSec: 0, stoppedFor: 0, watchId: null, timer: null, wake: null };
-
-  function onPosition(pos) {
-    if (!live.active) return;
-    const c = pos.coords;
-    if (c.accuracy && c.accuracy > MAX_ACCURACY_M) return;
-    const p = { lat: c.latitude, lon: c.longitude, alt: typeof c.altitude === 'number' ? c.altitude : null };
-    const last = live.points[live.points.length - 1];
-    if (last) {
-      const step = haversine(last, p);
-      if (step < MIN_STEP_M) return;
-      if (!live.paused) {
-        live.distanceM += step;
-        if (last.alt != null && p.alt != null && p.alt - last.alt > MIN_CLIMB_M) live.climbM += p.alt - last.alt;
-      }
-    }
-    if (!live.paused) live.points.push(p);
-    live.speed = typeof c.speed === 'number' && c.speed >= 0 ? c.speed : 0;
-    if (!live.paused) live.maxSpeed = Math.max(live.maxSpeed, live.speed);
-    while (live.distanceM >= (live.splits.length + 1) * 1000) {
-      live.splits.push({ km: live.splits.length + 1, sec: live.elapsed - live.lastSplitSec });
-      live.lastSplitSec = live.elapsed;
-    }
-    updateRideUI();
-  }
-
-  function tick() {
-    if (!live.active) return;
-    const s = settings();
-    if (s.autoPause || live.autoPaused) {
-      live.stoppedFor = live.speed < STOP_SPEED_MPS ? live.stoppedFor + 1 : 0;
-      if (s.autoPause && !live.paused && live.stoppedFor >= STOP_AFTER_SEC) { live.paused = true; live.autoPaused = true; }
-      if (live.autoPaused && live.paused && live.speed >= STOP_SPEED_MPS) { live.paused = false; live.autoPaused = false; }
-    }
-    if (!live.paused) live.elapsed++;
-    updateRideUI();
-  }
-
-  async function keepAwake(on) {
-    try {
-      if (on && 'wakeLock' in navigator) live.wake = await navigator.wakeLock.request('screen');
-      else if (live.wake) { await live.wake.release(); live.wake = null; }
-    } catch { /* optional */ }
-  }
-
-  function renderRideIdle() {
-    if (live.active) { $('#ride-idle').classList.add('hidden'); $('#ride-active').classList.remove('hidden'); updateRideUI(); return; }
-    $('#ride-idle').classList.remove('hidden'); $('#ride-active').classList.add('hidden');
-    $('#opt-autopause').checked = settings().autoPause;
-  }
-
-  function startRide() {
-    if (!('geolocation' in navigator)) { $('#ride-note').textContent = 'This browser cannot access GPS.'; return; }
-    saveSettings({ autoPause: $('#opt-autopause').checked });
-    Object.assign(live, { active: true, paused: false, autoPaused: false, startMs: Date.now(), elapsed: 0, distanceM: 0, climbM: 0, speed: 0, maxSpeed: 0, points: [], splits: [], lastSplitSec: 0, stoppedFor: 0 });
-    live.watchId = navigator.geolocation.watchPosition(onPosition, (err) => { $('#ride-note').textContent = `GPS: ${err.message}`; }, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
-    live.timer = setInterval(tick, 1000);
-    keepAwake(true);
-    renderRideIdle();
-  }
-
-  function finishRide() {
-    if (!live.active) return;
-    navigator.geolocation.clearWatch(live.watchId);
-    clearInterval(live.timer); keepAwake(false);
-    live.active = false;
-    if (live.points.length >= 2 && live.distanceM > 20) {
-      const ride = { id: live.startMs, startMs: live.startMs, durationSec: live.elapsed, distanceM: live.distanceM, elevGainM: live.climbM, maxSpeedMps: live.maxSpeed, splits: live.splits, points: live.points, name: '', notes: '' };
-      saveRides([ride, ...rides()]);
-      $('#ride-note').textContent = 'Ride saved. Name it in the Rides tab.';
-    } else {
-      $('#ride-note').textContent = 'Too short to save.';
-    }
-    renderRideIdle();
-  }
-
-  function updateRideUI() {
-    if (!live.active) return;
-    $('#timer').textContent = fmtTime(live.elapsed);
-    $('#speed').textContent = live.paused ? '0.0' : fmtSpeed(live.speed);
-    $('#dist').textContent = fmtDist(live.distanceM, 2);
-    $('#dist').parentElement.querySelector('.unit').textContent = unit();
-    $('#avg').textContent = fmtSpeed(live.elapsed > 0 ? live.distanceM / live.elapsed : 0);
-    $('#climb').textContent = live.climbM.toFixed(0);
-    $('#pause-btn').textContent = live.paused ? 'Resume' : 'Pause';
-    $('#rec-label').textContent = live.autoPaused ? 'Auto-paused' : live.paused ? 'Paused' : 'Recording';
-    $('#rec-dot').classList.toggle('paused', live.paused);
-    $('#autopause-tag').textContent = settings().autoPause ? 'auto-pause on' : '';
-    renderSplits(live.splits, $('#splits'));
-    if ($('#live-route').offsetParent) drawRoute($('#live-route'), live.points);
-  }
-
-  function renderSplits(splits, box) {
-    if (!splits.length) { box.innerHTML = 'Splits appear every kilometre.'; return; }
-    const best = Math.min(...splits.map((s) => s.sec));
-    box.innerHTML = splits.map((s) => `<div class="split ${s.sec === best ? 'best' : ''}"><span>${s.km} km</span><div class="track"><div class="fill" style="width:${Math.max(8, best / s.sec * 100)}%"></div></div><span>${fmtTime(s.sec)}</span></div>`).join('');
-    requestAnimationFrame(() => box.querySelectorAll('.fill').forEach((f) => (f.style.width = f.style.width)));
-  }
-
-  $('#start-btn').addEventListener('click', startRide);
-  $('#pause-btn').addEventListener('click', () => { live.paused = !live.paused; live.autoPaused = false; updateRideUI(); });
-  $('#finish-btn').addEventListener('click', finishRide);
-  $('#opt-autopause').addEventListener('change', (e) => saveSettings({ autoPause: e.target.checked }));
-  window.addEventListener('resize', () => { if (live.active) updateRideUI(); });
-  window.addEventListener('pagehide', () => { if (live.active) finishRide(); });
-
-  function drawRoute(canvas, pts, { empty = 'Route appears once GPS locks on' } = {}) {
-    const dpr = window.devicePixelRatio || 1, w = canvas.clientWidth, h = canvas.clientHeight;
-    if (!w || !h) return;
-    canvas.width = w * dpr; canvas.height = h * dpr;
-    const ctx = canvas.getContext('2d'); ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, w, h);
-    if (pts.length < 2) { ctx.fillStyle = getComputedStyle(canvas).color; ctx.globalAlpha = .45; ctx.font = '14px Inter, sans-serif'; ctx.textAlign = 'center'; ctx.fillText(empty, w / 2, h / 2); ctx.globalAlpha = 1; return; }
-    const pad = 24;
-    const lats = pts.map((p) => p.lat), lons = pts.map((p) => p.lon);
-    const minLat = Math.min(...lats), maxLat = Math.max(...lats), minLon = Math.min(...lons), maxLon = Math.max(...lons);
-    const cos = Math.max(0.2, Math.cos((minLat + maxLat) / 2 * Math.PI / 180));
-    const rx = Math.max((maxLon - minLon) * cos, 1e-6), ry = Math.max(maxLat - minLat, 1e-6);
-    const sc = Math.min((w - 2 * pad) / rx, (h - 2 * pad) / ry), ox = (w - rx * sc) / 2, oy = (h - ry * sc) / 2;
-    const P = (p) => [ox + (p.lon - minLon) * cos * sc, oy + (maxLat - p.lat) * sc];
-    const lime = getComputedStyle(document.documentElement).getPropertyValue('--lime').trim() || '#c6f432';
-    ctx.lineWidth = 4; ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.strokeStyle = lime;
-    ctx.beginPath(); pts.forEach((p, i) => { const [x, y] = P(p); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }); ctx.stroke();
-    const [sx, sy] = P(pts[0]), [ex, ey] = P(pts[pts.length - 1]);
-    ctx.fillStyle = '#7be0a4'; ctx.beginPath(); ctx.arc(sx, sy, 6, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = lime; ctx.beginPath(); ctx.arc(ex, ey, 6, 0, Math.PI * 2); ctx.fill();
-  }
-
-  // ---------- rides ----------
-  const rideTitle = (r) => r.name || `Ride · ${new Date(r.startMs).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}`;
-
-  function gpxFor(r) {
-    const pts = r.points.map((p) => `      <trkpt lat="${p.lat}" lon="${p.lon}">${p.alt != null ? `<ele>${p.alt.toFixed(1)}</ele>` : ''}</trkpt>`).join('\n');
-    return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Kxko Brief" xmlns="http://www.topografix.com/GPX/1/1">\n  <trk><name>${esc(rideTitle(r))}</name>\n    <trkseg>\n${pts}\n    </trkseg>\n  </trk>\n</gpx>`;
-  }
-
-  function download(name, text, type = 'application/octet-stream') {
-    const url = URL.createObjectURL(new Blob([text], { type }));
-    const a = Object.assign(document.createElement('a'), { href: url, download: name });
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
-
-  function renderRides() {
-    const list = rides(), total = list.reduce((a, r) => a + r.distanceM, 0);
-    $('#r-count').textContent = list.length;
-    $('#r-km').textContent = fmtDist(total, 0);
-    $('#r-unit').textContent = unit();
-    $('#r-climb').textContent = list.reduce((a, r) => a + r.elevGainM, 0).toFixed(0);
-    const box = $('#ride-list');
-    if (!list.length) { box.innerHTML = '<div class="panel empty"><h2>No rides yet</h2><p class="muted">Finished rides show up here with their route, splits and notes.</p></div>'; return; }
-    box.innerHTML = list.map((r) => `
-      <div class="panel ride-card" data-id="${r.id}">
-        <div class="top2"><b style="font:600 16px var(--head)">${esc(rideTitle(r))}</b><span class="km">${fmtDist(r.distanceM)} ${unit()}</span></div>
-        <p class="muted small" style="margin:4px 0 0">${fmtTime(r.durationSec)} · avg ${fmtSpeed(r.durationSec ? r.distanceM / r.durationSec : 0)} ${speedUnit()} · +${r.elevGainM.toFixed(0)} m</p>
-        <div class="details">
-          <canvas class="route" data-route="${r.id}" style="height:200px;margin-top:12px"></canvas>
-          <div class="splits" style="margin-top:14px" data-splits="${r.id}"></div>
-          <label class="field" style="margin-top:14px">Name<input data-name="${r.id}" value="${esc(r.name || '')}" placeholder="${esc(rideTitle(r))}"></label>
-          <label class="field">Notes<textarea data-notes="${r.id}" placeholder="How did it feel? Weather, bike, route…">${esc(r.notes || '')}</textarea></label>
-          <div class="actions">
-            <button class="btn primary" data-save="${r.id}">Save details</button>
-            <button class="btn" data-gpx="${r.id}">Download GPX</button>
-            <button class="btn danger" data-del="${r.id}">Delete</button>
-          </div>
+    <!-- HOME -->
+    <section class="view active" id="view-dashboard" data-title="Home">
+      <div class="panel hero">
+        <div class="ring-wrap">
+          <svg viewBox="0 0 140 140" class="ring" aria-hidden="true">
+            <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#c6f432"/><stop offset="1" stop-color="#7dd3fc"/></linearGradient></defs>
+            <circle cx="70" cy="70" r="58" class="ring-track"/>
+            <circle id="ring-arc" cx="70" cy="70" r="58" class="ring-arc"/>
+          </svg>
+          <div class="ring-center"><b id="ring-pct">0%</b><small>of goal</small></div>
         </div>
-      </div>`).join('');
-  }
+        <div class="hero-text">
+          <p class="eyebrow" id="greeting"></p>
+          <p class="hero-line" id="hero-line"></p>
+          <p class="streak" id="streak"></p>
+        </div>
+      </div>
 
-  $('#ride-list').addEventListener('click', (e) => {
-    const t = e.target;
-    const save = t.closest('[data-save]');
-    if (save) {
-      e.stopPropagation();
-      const id = save.dataset.save;
-      const name = document.querySelector(`[data-name="${id}"]`).value.trim();
-      const notes = document.querySelector(`[data-notes="${id}"]`).value.trim();
-      saveRides(rides().map((r) => (String(r.id) === id ? { ...r, name, notes } : r)));
-      save.textContent = 'Saved ✓'; setTimeout(() => { save.textContent = 'Save details'; }, 1200);
-      return;
-    }
-    const gpx = t.closest('[data-gpx]');
-    if (gpx) { e.stopPropagation(); const r = rides().find((x) => String(x.id) === gpx.dataset.gpx); download(`ride-${dayKey(r.startMs)}.gpx`, gpxFor(r), 'application/gpx+xml'); return; }
-    const del = t.closest('[data-del]');
-    if (del) { e.stopPropagation(); if (confirm('Delete this ride?')) { saveRides(rides().filter((x) => String(x.id) !== del.dataset.del)); renderRides(); renderDashboard(); } return; }
-    if (t.closest('input, textarea, label')) return;
-    const card = t.closest('.ride-card');
-    if (card) {
-      card.classList.toggle('open');
-      if (card.classList.contains('open')) {
-        const r = rides().find((x) => String(x.id) === card.dataset.id);
-        requestAnimationFrame(() => {
-          drawRoute(card.querySelector('canvas'), r.points, { empty: 'No GPS track saved' });
-          renderSplits(r.splits || [], card.querySelector('[data-splits]'));
-        });
-      }
-    }
-  });
+      <div class="grid4">
+        <div class="panel kpi"><span>This week</span><b id="w-km">0</b><small id="w-unit">km</small></div>
+        <div class="panel kpi"><span>Rides</span><b id="w-rides">0</b><small>this week</small></div>
+        <div class="panel kpi"><span>Time</span><b id="w-time">0:00</b><small>hours</small></div>
+        <div class="panel kpi"><span>Climb</span><b id="w-climb">0</b><small>m</small></div>
+      </div>
 
-  // ---------- study ----------
-  let studyCard = null, studyTopic = 'All';
-  const getBoxes = () => read(K.study, {});
-  const boxOf = (b, id) => b[id] ?? 1;
-  const topics = () => ['All', ...new Set(content.study.map((c) => c.topic).filter(Boolean))];
-  const deck = () => content.study.filter((c) => studyTopic === 'All' || c.topic === studyTopic);
+      <div class="panel">
+        <div class="head"><h2>Last 7 days</h2><small class="muted" id="bars-note"></small></div>
+        <div class="bars" id="bars"></div>
+      </div>
 
-  function renderStudy() {
-    const b = getBoxes(), cards = deck();
-    const mastered = cards.filter((c) => boxOf(b, c.id) >= MAX_BOX).length;
-    $('#study-progress-label').textContent = `${mastered} of ${cards.length} mastered`;
-    $('#study-bar').style.width = `${cards.length ? mastered / cards.length * 100 : 0}%`;
-    $('#study-topic').textContent = studyTopic === 'All' ? '' : studyTopic;
-    $('#study-filters').innerHTML = topics().map((t) => `<button class="filter ${t === studyTopic ? 'on' : ''}" data-topic="${esc(t)}">${esc(t)}</button>`).join('');
-    studyCard = cards.filter((c) => boxOf(b, c.id) < MAX_BOX).reduce((best, c) => (!best || boxOf(b, c.id) < boxOf(b, best.id) ? c : best), null);
-    const done = !studyCard;
-    $('#study-done').classList.toggle('hidden', !done);
-    $('.flash-actions').classList.toggle('hidden', done);
-    $('.flashwrap').classList.toggle('hidden', done);
-    if (done) return;
-    $('#flash-front').textContent = studyCard.front;
-    $('#flash-back').textContent = studyCard.back;
-    $('#flash').classList.remove('flipped');
-    $('#show-btn').classList.remove('hidden');
-    $('#grade-btns').classList.add('hidden');
-  }
+      <div class="panel">
+        <div class="head"><h2>Personal records</h2><small class="muted">all rides</small></div>
+        <div class="records" id="records"></div>
+      </div>
 
-  function flip(force) {
-    const on = $('#flash').classList.toggle('flipped', force ?? undefined);
-    $('#show-btn').classList.toggle('hidden', on);
-    $('#grade-btns').classList.toggle('hidden', !on);
-  }
-  function grade(gotIt) {
-    const b = getBoxes();
-    b[studyCard.id] = gotIt ? Math.min(MAX_BOX, boxOf(b, studyCard.id) + 1) : 1;
-    write(K.study, b); renderStudy();
-  }
-  $('#study-filters').addEventListener('click', (e) => { const t = e.target.closest('[data-topic]'); if (t) { studyTopic = t.dataset.topic; renderStudy(); } });
-  $('#flash').addEventListener('click', () => studyCard && flip());
-  $('#flash').addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && studyCard) { e.preventDefault(); flip(); } });
-  $('#show-btn').addEventListener('click', () => flip(true));
-  $('#gotit-btn').addEventListener('click', () => grade(true));
-  $('#again-btn').addEventListener('click', () => grade(false));
-  $('#reset-study').addEventListener('click', () => { const b = getBoxes(); deck().forEach((c) => delete b[c.id]); write(K.study, b); renderStudy(); });
+      <div class="panel" id="last-card">
+        <div class="head"><h2>Last ride</h2></div>
+        <div id="last-ride" class="muted">No rides yet. Start one from the Ride tab.</div>
+      </div>
 
-  // ---------- quiz with timer ----------
-  let quiz = { index: 0, score: 0, answered: false, picked: null, wrong: [], questions: [] };
-  let qTimer = null, qLeft = 0;
+      <div class="actions-col">
+        <button class="action primary" data-goto="ride"><span>Start a ride</span><b>→</b></button>
+        <button class="action" data-goto="study"><span>Study cards</span><b>→</b></button>
+        <button class="action" data-goto="quiz"><span>Cycling quiz</span><b>→</b></button>
+      </div>
+    </section>
 
-  function startQuiz(questions = content.cycling) {
-    quiz = { index: 0, score: 0, answered: false, picked: null, wrong: [], questions };
-    renderQuiz();
-  }
+    <!-- RIDE -->
+    <section class="view" id="view-ride" data-title="Ride">
+      <div id="ride-idle" class="ride-idle">
+        <p class="muted">GPS records distance, speed and climb. Keep this page open while you ride.</p>
+        <button class="go" id="start-btn"><span>GO</span></button>
+        <p class="muted small" id="ride-note"></p>
+        <label class="toggle"><input type="checkbox" id="opt-autopause"> Auto-pause when stopped</label>
+      </div>
 
-  function stopQuizTimer() { clearInterval(qTimer); qTimer = null; }
-  function startQuestionTimer() {
-    stopQuizTimer(); qLeft = QUIZ_SECONDS;
-    updateQuizTimer();
-    qTimer = setInterval(() => {
-      qLeft -= 0.1;
-      if (qLeft <= 0) { stopQuizTimer(); answer(-1); return; }
-      updateQuizTimer();
-    }, 100);
-  }
-  function updateQuizTimer() { $('#quiz-timer').style.width = `${Math.max(0, qLeft / QUIZ_SECONDS * 100)}%`; }
+      <div id="ride-active" class="hidden">
+        <div class="status"><span class="dot" id="rec-dot"></span><span id="rec-label">Recording</span><span class="muted small" id="autopause-tag"></span></div>
+        <div class="timer" id="timer">00:00</div>
+        <div class="speedline"><b id="speed">0.0</b><span class="unit">km/h</span></div>
+        <div class="grid3">
+          <div class="panel kpi"><span>Distance</span><b id="dist">0.00</b><small class="unit">km</small></div>
+          <div class="panel kpi"><span>Avg</span><b id="avg">0.0</b><small class="unit">km/h</small></div>
+          <div class="panel kpi"><span>Climb</span><b id="climb">0</b><small class="unit">m</small></div>
+        </div>
+        <div class="panel map"><canvas id="live-route" class="route"></canvas></div>
+        <div class="panel">
+          <div class="head"><h2>Splits</h2><small class="muted">per km</small></div>
+          <div id="splits" class="splits muted">Splits appear every kilometre.</div>
+        </div>
+        <div class="row">
+          <button class="btn" id="pause-btn">Pause</button>
+          <button class="btn danger" id="finish-btn">Finish</button>
+        </div>
+      </div>
+    </section>
 
-  function renderQuiz() {
-    const qs = quiz.questions, total = qs.length, body = $('#quiz-body');
-    $('#quiz-progress').textContent = quiz.index >= total ? 'Finished' : `Question ${quiz.index + 1} of ${total}`;
-    $('#quiz-score').textContent = `Score ${quiz.score}`;
-    $('#quiz-bar').style.width = `${total ? quiz.index / total * 100 : 0}%`;
-    if (!total) { stopQuizTimer(); updateQuizTimer(); body.innerHTML = '<div class="panel empty"><h2>No questions</h2><p class="muted">Add questions in data/content.js.</p></div>'; return; }
+    <!-- STUDY -->
+    <section class="view" id="view-study" data-title="Study">
+      <div class="banner" id="study-banner"></div>
+      <div class="panel">
+        <div class="head"><h2 id="study-progress-label"></h2><small class="muted" id="study-topic"></small></div>
+        <div class="meter"><div id="study-bar" class="meter-fill"></div></div>
+        <div class="filters" id="study-filters"></div>
+        <p class="muted small">Got it moves a card up. Again sends it back to the start.</p>
+      </div>
 
-    if (quiz.index >= total) {
-      stopQuizTimer(); $('#quiz-timer').style.width = '0%';
-      const pct = Math.round(quiz.score / total * 100);
-      body.innerHTML = `<div class="panel done"><span class="label">Result</span><div class="score-big">${quiz.score}/${total}</div>
-        <p class="muted">${pct >= 80 ? 'Strong round.' : pct >= 50 ? 'Solid. Review the misses.' : 'Keep going, repetition works.'}</p>
-        <div class="row" style="justify-content:center;flex-wrap:wrap">
-          ${quiz.wrong.length ? '<button class="btn primary" id="retry-wrong">Retry missed</button>' : ''}
-          <button class="btn" id="restart-quiz">Start over</button></div></div>`;
-      $('#restart-quiz').addEventListener('click', () => startQuiz());
-      $('#retry-wrong')?.addEventListener('click', () => startQuiz(quiz.wrong.slice()));
-      return;
-    }
+      <div class="flashwrap">
+        <div class="flash" id="flash" role="button" tabindex="0">
+          <div class="face front"><span class="label" id="flash-label">Question</span><p id="flash-front"></p><small class="muted">Tap to flip</small></div>
+          <div class="face back"><span class="label">Answer</span><p id="flash-back"></p></div>
+        </div>
+      </div>
+      <div class="flash-actions">
+        <button class="btn primary wide" id="show-btn">Show answer</button>
+        <div id="grade-btns" class="row hidden">
+          <button class="btn danger grow" id="again-btn">Again</button>
+          <button class="btn primary grow" id="gotit-btn">Got it</button>
+        </div>
+      </div>
+      <div class="panel done hidden" id="study-done">
+        <h2>Deck complete</h2>
+        <p class="muted">Every card in this topic has reached the top box.</p>
+        <button class="btn" id="reset-study">Start over</button>
+      </div>
+    </section>
 
-    const q = qs[quiz.index];
-    body.innerHTML = `<div class="panel">
-      <p class="q-text">${esc(q.q)}</p>
-      <div>${q.options.map((o, i) => `<button class="opt" data-i="${i}"><span class="letter">${'ABCD'[i] ?? i + 1}</span><span>${esc(o)}</span></button>`).join('')}</div>
-      <p class="feedback" id="feedback"></p>
-      <button class="btn primary wide" id="next-q" ${quiz.answered ? '' : 'disabled'}>${quiz.index + 1 === total ? 'See result' : 'Next question'}</button>
-    </div>`;
-    $$('#quiz-body .opt').forEach((b) => b.addEventListener('click', () => answer(Number(b.dataset.i))));
-    $('#next-q').addEventListener('click', () => { if (!quiz.answered) return; quiz.index++; quiz.answered = false; quiz.picked = null; renderQuiz(); startQuestionTimer(); });
-    if (quiz.answered) markAnswer(quiz.picked); else startQuestionTimer();
-  }
+    <!-- QUIZ -->
+    <section class="view" id="view-quiz" data-title="Test quiz">
+      <div class="banner" id="quiz-banner"></div>
+      <div class="panel">
+        <div class="head"><h2 id="quiz-progress"></h2><small class="muted" id="quiz-score"></small></div>
+        <div class="meter"><div id="quiz-bar" class="meter-fill"></div></div>
+        <div class="meter timer-bar"><div id="quiz-timer" class="meter-fill"></div></div>
+        <small class="muted">15 seconds per question. Running out counts as a miss.</small>
+      </div>
+      <div id="quiz-body"></div>
+    </section>
 
-  function answer(i) {
-    if (quiz.answered) return;
-    stopQuizTimer();
-    quiz.answered = true; quiz.picked = i;
-    const q = quiz.questions[quiz.index];
-    if (i === q.answer) quiz.score++; else quiz.wrong.push(q);
-    markAnswer(i);
-    $('#next-q').disabled = false;
-  }
+    <!-- RIDES -->
+    <section class="view" id="view-rides" data-title="Rides">
+      <div class="grid3">
+        <div class="panel kpi"><span>Rides</span><b id="r-count">0</b></div>
+        <div class="panel kpi"><span>Distance</span><b id="r-km">0</b><small class="unit" id="r-unit">km</small></div>
+        <div class="panel kpi"><span>Climb</span><b id="r-climb">0</b><small class="unit">m</small></div>
+      </div>
+      <div id="ride-list"></div>
+    </section>
 
-  function markAnswer(i) {
-    const q = quiz.questions[quiz.index];
-    $$('#quiz-body .opt').forEach((b, idx) => {
-      b.disabled = true;
-      if (idx === q.answer) b.classList.add('right');
-      if (idx === i && i !== q.answer) b.classList.add('wrong');
-    });
-    const fb = $('#feedback');
-    fb.textContent = i === q.answer ? 'Correct.' : i === -1 ? `Time's up. The answer is ${'ABCD'[q.answer]}.` : `Not quite. The answer is ${'ABCD'[q.answer]}.`;
-    fb.className = `feedback ${i === q.answer ? 'good' : 'bad'}`;
-    $('#quiz-score').textContent = `Score ${quiz.score}`;
-    updateQuizTimer();
-  }
+    <!-- SETTINGS -->
+    <section class="view" id="view-settings" data-title="Settings">
+      <div class="panel">
+        <h2>Goals and units</h2>
+        <label class="field">Weekly goal (km)<input type="number" id="set-goal" min="10" step="5"></label>
+        <label class="field">Units<select id="set-units"><option value="km">Kilometres</option><option value="mi">Miles</option></select></label>
+        <label class="toggle"><input type="checkbox" id="set-autopause"> Auto-pause by default</label>
+      </div>
+      <div class="panel">
+        <h2>Theme</h2>
+        <label class="field">Appearance<select id="set-theme"><option value="system">Match system</option><option value="dark">Dark</option><option value="light">Light</option></select></label>
+      </div>
+      <div class="panel" id="account-panel">
+        <h2>Account</h2>
+        <p class="muted small" id="set-role"></p>
+        <form id="signin-form" class="signin">
+          <label class="field">Email<input type="email" id="si-email" autocomplete="username" required></label>
+          <label class="field">Password<input type="password" id="si-password" autocomplete="current-password" required></label>
+          <button class="btn primary wide" type="submit" id="si-submit">Sign in</button>
+          <p class="small" id="si-error" role="alert"></p>
+        </form>
+        <button class="btn wide hidden" id="signout-btn">Sign out</button>
+      </div>
+      <div class="panel">
+        <h2>Backup</h2>
+        <p class="muted small">Study and quiz content comes from your Supabase account after you sign in. Rides and progress stay in this browser. Export a file to keep them safe.</p>
+        <div class="row">
+          <button class="btn grow" id="export-btn">Export backup</button>
+          <label class="btn grow file">Import backup<input type="file" id="import-file" accept="application/json" hidden></label>
+        </div>
+        <button class="btn danger wide" id="wipe-btn">Erase all data</button>
+      </div>
+      <p class="muted small center">Kxko Brief · works offline once installed</p>
+    </section>
+  </div>
 
-  // ---------- settings & backup ----------
-  function renderSettings() {
-    const s = settings();
-    $('#set-goal').value = s.goalKm; $('#set-units').value = s.units; $('#set-autopause').checked = s.autoPause;
-    $('#set-theme').value = s.theme;
-    $('#set-role').textContent = 'Standard access. Your data stays in this browser.';
-  }
-  $('#set-goal').addEventListener('change', (e) => { const v = Math.max(10, Number(e.target.value) || 100); e.target.value = v; saveSettings({ goalKm: v }); });
-  $('#set-units').addEventListener('change', (e) => saveSettings({ units: e.target.value }));
-  $('#set-autopause').addEventListener('change', (e) => saveSettings({ autoPause: e.target.checked }));
+  <nav class="tabbar" aria-label="Main">
+    <button class="tab active" data-tab="dashboard"><svg viewBox="0 0 24 24"><path d="M4 11.5 12 5l8 6.5V20h-5v-5h-6v5H4z"/></svg><span>Home</span></button>
+    <button class="tab" data-tab="ride"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/></svg><span>Ride</span></button>
+    <button class="tab" data-tab="study"><svg viewBox="0 0 24 24"><rect x="4" y="5" width="16" height="13" rx="3"/><path d="M8 10h8M8 14h5"/></svg><span>Study</span></button>
+    <button class="tab" data-tab="quiz"><svg viewBox="0 0 24 24"><path d="M9 9a3 3 0 1 1 4 2.8c-.7.3-1 .9-1 1.7V15"/><circle cx="12" cy="18" r=".6"/></svg><span>Quiz</span></button>
+    <button class="tab" data-tab="rides"><svg viewBox="0 0 24 24"><path d="M5 19V9M12 19V5M19 19v-7"/></svg><span>Rides</span></button>
+    <button class="tab" data-tab="settings"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg><span>Settings</span></button>
+  </nav>
 
-  $('#export-btn').addEventListener('click', () => {
-    download(`kxko-brief-backup-${dayKey(Date.now())}.json`, JSON.stringify({ app: 'kxko-brief', version: 4, exportedAt: new Date().toISOString(), settings: settings(), rides: rides(), study: getBoxes() }, null, 2), 'application/json');
-  });
-  $('#import-file').addEventListener('change', async (e) => {
-    const f = e.target.files[0]; if (!f) return;
-    try {
-      const data = JSON.parse(await f.text());
-      if (data.app !== 'kxko-brief' || !Array.isArray(data.rides)) throw new Error('not a Kxko Brief backup');
-      saveRides(data.rides); if (data.study) write(K.study, data.study); if (data.settings) write(K.settings, data.settings);
-      applyTheme(); renderSettings(); alert(`Imported ${data.rides.length} rides.`);
-    } catch (err) { alert(`Import failed: ${err.message}`); }
-    e.target.value = '';
-  });
-  $('#wipe-btn').addEventListener('click', () => {
-    if (!confirm('Erase all rides, study progress and settings on this device?')) return;
-    [K.rides, K.study, K.settings].forEach((k) => localStorage.removeItem(k));
-    applyTheme(); renderSettings(); renderDashboard();
-  });
-
-  // ---------- offline ----------
-  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
-  }
-
-  // ---------- start ----------
-  applyTheme();
-  const initial = location.hash.replace('#', '');
-  go(initial || 'dashboard');
-})();
+  <script src="data/config.js"></script>
+  <script src="data/content.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
