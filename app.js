@@ -280,3 +280,4 @@
   function download(name, text, type = 'application/octet-stream') {
     const url = URL.createObjectURL(new Blob([text], { type }));
     const a = Object.assign(document.createElement('a'),
+})();
