@@ -97,6 +97,7 @@
   }
 
   function renderDashboard() {
+    renderUpcoming();
     const s = settings(), list = rides(), now = Date.now(), d = new Date();
     $('#date-line').textContent = d.toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'short' });
     const h = d.getHours();
@@ -209,8 +210,9 @@
     clearInterval(live.timer); keepAwake(false);
     live.active = false;
     if (live.points.length >= 2 && live.distanceM > 20) {
-      const ride = { id: live.startMs, startMs: live.startMs, durationSec: live.elapsed, distanceM: live.distanceM, elevGainM: live.climbM, maxSpeedMps: live.maxSpeed, splits: live.splits, points: live.points, name: '', notes: '' };
+      const ride = { id: live.startMs, uid: newUid(), startMs: live.startMs, durationSec: live.elapsed, distanceM: live.distanceM, elevGainM: live.climbM, maxSpeedMps: live.maxSpeed, splits: live.splits, points: live.points, name: '', notes: '' };
       saveRides([ride, ...rides()]);
+      pushRide(ride);
       $('#ride-note').textContent = 'Ride saved. Name it in the Rides tab.';
     } else {
       $('#ride-note').textContent = 'Too short to save.';
@@ -318,14 +320,17 @@
       const id = save.dataset.save;
       const name = document.querySelector(`[data-name="${id}"]`).value.trim();
       const notes = document.querySelector(`[data-notes="${id}"]`).value.trim();
-      saveRides(rides().map((r) => (String(r.id) === id ? { ...r, name, notes } : r)));
+      const updated = rides().map((r) => (String(r.id) === id ? { ...r, name, notes } : r));
+      saveRides(updated);
+      const changedRide = updated.find((r) => String(r.id) === id);
+      if (changedRide) pushRide(changedRide);
       save.textContent = 'Saved ✓'; setTimeout(() => { save.textContent = 'Save details'; }, 1200);
       return;
     }
     const gpx = t.closest('[data-gpx]');
     if (gpx) { e.stopPropagation(); const r = rides().find((x) => String(x.id) === gpx.dataset.gpx); download(`ride-${dayKey(r.startMs)}.gpx`, gpxFor(r), 'application/gpx+xml'); return; }
     const del = t.closest('[data-del]');
-    if (del) { e.stopPropagation(); if (confirm('Delete this ride?')) { saveRides(rides().filter((x) => String(x.id) !== del.dataset.del)); renderRides(); renderDashboard(); } return; }
+    if (del) { e.stopPropagation(); if (confirm('Delete this ride?')) { const gone = rides().find((x) => String(x.id) === del.dataset.del); saveRides(rides().filter((x) => String(x.id) !== del.dataset.del)); if (gone?.uid) deleteRemoteRide(gone.uid); renderRides(); renderDashboard(); } return; }
     if (t.closest('input, textarea, label')) return;
     const card = t.closest('.ride-card');
     if (card) {
@@ -508,7 +513,7 @@
   const sbSession = () => read(SESSION_KEY, null);
   const sbSignedIn = () => Boolean(sbSession()?.access_token);
 
-  const remote = { status: 'signed-out', error: '', cards: [], quiz: [], exams: 0 };
+  const remote = { status: 'signed-out', error: '', cards: [], quiz: [], exams: 0, examList: [] };
   let liveLoaded = false;
 
   const shuffle = (a) => { const b = a.slice(); for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; } return b; };
@@ -518,8 +523,8 @@
     try { return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))); } catch { return {}; }
   }
 
-  async function sbFetch(path, { method = 'GET', body, token } = {}) {
-    const headers = { apikey: SB.key, 'Content-Type': 'application/json', Authorization: `Bearer ${token || sbSession()?.access_token || SB.key}` };
+  async function sbFetch(path, { method = 'GET', body, token, prefer } = {}) {
+    const headers = { apikey: SB.key, 'Content-Type': 'application/json', Authorization: `Bearer ${token || sbSession()?.access_token || SB.key}`, ...(prefer ? { Prefer: prefer } : {}) };
     const res = await fetch(`${SB.url}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
     const text = await res.text();
     const data = text ? JSON.parse(text) : null;
@@ -576,7 +581,7 @@
     remote.status = 'loading';
     try {
       const today = dayKey(Date.now());
-      const exams = await sbCall(`/rest/v1/exams?select=id,subject,exam_date,topics&exam_date=gte.${today}&order=exam_date.asc`);
+      const exams = await sbCall(`/rest/v1/exams?select=id,subject,exam_date,topics,round&exam_date=gte.${today}&order=exam_date.asc`);
       remote.exams = exams.length;
       const subjectOf = Object.fromEntries(exams.map((e) => [e.id, tidy(e.subject) || 'Test']));
       const rows = exams.length ? await sbCall(`/rest/v1/exam_questions?select=id,exam_id,kind,payload&exam_id=in.(${exams.map((e) => e.id).join(',')})`) : [];
@@ -607,14 +612,18 @@
           });
         }
       }
+      remote.examList = exams.map((e) => ({
+        subject: tidy(e.subject) || 'Test', date: e.exam_date, round: e.round, topics: tidy(e.topics),
+        count: rows.filter((r) => r.exam_id === e.id && r.kind).length
+      }));
       remote.cards = cards; remote.quiz = quiz;
       remote.status = exams.length ? (quiz.length || cards.length ? 'live' : 'no-questions') : 'no-exams';
       remote.error = '';
     } catch (err) {
-      remote.status = 'error'; remote.error = err.message; remote.cards = []; remote.quiz = [];
+      remote.status = 'error'; remote.error = err.message; remote.cards = []; remote.quiz = []; remote.examList = [];
     }
     liveLoaded = true;
-    renderStudy(); renderQuiz(); renderSettings();
+    renderStudy(); renderQuiz(); renderSettings(); renderUpcoming();
   }
 
   function reportAnswer(qid, correct) {
@@ -663,12 +672,32 @@
       await signIn($('#si-email').value, $('#si-password').value);
       $('#si-password').value = '';
       await loadLive(true);
+      await syncRides();
       renderSettings();
     } catch (ex) {
       err.textContent = ex.message; err.className = 'small error';
     } finally { btn.disabled = false; }
   });
   $('#signout-btn').addEventListener('click', signOut);
+
+  function renderUpcoming() {
+    const box = $('#upcoming-tests');
+    if (!box) return;
+    const note = $('#tests-note');
+    if (!sbSignedIn()) { note.textContent = ''; box.textContent = 'Sign in under Settings to see your upcoming tests.'; return; }
+    if (remote.status === 'loading') { note.textContent = ''; box.textContent = 'Loading…'; return; }
+    if (remote.status === 'error') { note.textContent = ''; box.textContent = `Couldn't load your tests: ${remote.error}`; return; }
+    if (!remote.examList.length) { note.textContent = ''; box.textContent = 'No upcoming tests in your account.'; return; }
+    const withItems = remote.examList.filter((e) => e.count > 0).length;
+    note.textContent = `${withItems} of ${remote.examList.length} with items`;
+    box.innerHTML = remote.examList.map((e) => `
+      <div class="test-row">
+        <div class="test-date">${esc(new Date(e.date + 'T12:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' }))}</div>
+        <div class="test-main"><b>${esc(e.subject)}</b>${e.round ? ` <span class="muted small">· round ${e.round}</span>` : ''}
+          <div class="muted small">${esc(e.topics || 'No topics yet')}</div></div>
+        <div class="test-count ${e.count ? '' : 'none'}">${e.count ? `${e.count} items` : 'no items yet'}</div>
+      </div>`).join('');
+  }
 
   function renderAccount() {
     const s = sbSession();
@@ -679,9 +708,59 @@
     $('#signout-btn').classList.toggle('hidden', !s?.access_token);
   }
 
+  // ---------- ride sync (signed-in users only; rides are private by row-level security) ----------
+  const newUid = () => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`);
+
+  const rideToRow = (r) => ({
+    id: r.uid, start_ms: r.startMs, duration_sec: Math.round(r.durationSec || 0),
+    distance_m: r.distanceM || 0, elev_gain_m: r.elevGainM || 0, max_speed_mps: r.maxSpeedMps || 0,
+    name: r.name || '', notes: r.notes || '', splits: r.splits || [], points: r.points || []
+  });
+
+  const rideFromRow = (row) => ({
+    id: row.start_ms, uid: row.id, startMs: row.start_ms, durationSec: row.duration_sec,
+    distanceM: row.distance_m, elevGainM: row.elev_gain_m, maxSpeedMps: row.max_speed_mps,
+    name: row.name || '', notes: row.notes || '', splits: row.splits || [], points: row.points || []
+  });
+
+  async function pushRide(ride) {
+    if (!sbSignedIn() || !ride.uid) return;
+    try {
+      await sbCall('/rest/v1/cycling_rides?on_conflict=id', { method: 'POST', body: rideToRow(ride), prefer: 'resolution=merge-duplicates,return=minimal' });
+    } catch (err) { console.warn('Kxko: ride not saved online yet', err.message); }
+  }
+
+  async function deleteRemoteRide(uid) {
+    if (!sbSignedIn() || !uid) return;
+    try { await sbCall(`/rest/v1/cycling_rides?id=eq.${encodeURIComponent(uid)}`, { method: 'DELETE' }); }
+    catch (err) { console.warn('Kxko: delete not synced', err.message); }
+  }
+
+  // Two-way sync: gives every local ride a UUID, uploads rides the server lacks, downloads rides this device lacks.
+  async function syncRides() {
+    if (!sbSignedIn()) return;
+    let local = rides();
+    if (local.some((r) => !r.uid)) {
+      local = local.map((r) => (r.uid ? r : { ...r, uid: newUid() }));
+      saveRides(local);
+    }
+    try {
+      const serverRows = await sbCall('/rest/v1/cycling_rides?select=*&order=start_ms.desc');
+      const serverIds = new Set(serverRows.map((row) => row.id));
+      const localIds = new Set(local.map((r) => r.uid));
+      for (const r of local) if (!serverIds.has(r.uid)) await pushRide(r);
+      const pulled = serverRows.filter((row) => !localIds.has(row.id)).map(rideFromRow);
+      if (pulled.length) { saveRides([...local, ...pulled]); }
+      renderRides(); renderDashboard();
+    } catch (err) {
+      console.warn('Kxko: ride sync failed', err.message);
+    }
+  }
+
   // ---------- start ----------
   try { applyTheme(); } catch (err) { console.error('Kxko: theme', err); }
   loadLive();
+  syncRides();
   const initial = location.hash.replace('#', '');
   go(initial || 'dashboard');
 })();
