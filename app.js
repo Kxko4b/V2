@@ -279,5 +279,409 @@
 
   function download(name, text, type = 'application/octet-stream') {
     const url = URL.createObjectURL(new Blob([text], { type }));
-    const a = Object.assign(document.createElement('a'),
+    const a = Object.assign(document.createElement('a'), { href: url, download: name });
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function renderRides() {
+    const list = rides(), total = list.reduce((a, r) => a + r.distanceM, 0);
+    $('#r-count').textContent = list.length;
+    $('#r-km').textContent = fmtDist(total, 0);
+    $('#r-unit').textContent = unit();
+    $('#r-climb').textContent = list.reduce((a, r) => a + r.elevGainM, 0).toFixed(0);
+    const box = $('#ride-list');
+    if (!list.length) { box.innerHTML = '<div class="panel empty"><h2>No rides yet</h2><p class="muted">Finished rides show up here with their route, splits and notes.</p></div>'; return; }
+    box.innerHTML = list.map((r) => `
+      <div class="panel ride-card" data-id="${r.id}">
+        <div class="top2"><b style="font:600 16px var(--head)">${esc(rideTitle(r))}</b><span class="km">${fmtDist(r.distanceM)} ${unit()}</span></div>
+        <p class="muted small" style="margin:4px 0 0">${fmtTime(r.durationSec)} · avg ${fmtSpeed(r.durationSec ? r.distanceM / r.durationSec : 0)} ${speedUnit()} · +${r.elevGainM.toFixed(0)} m</p>
+        <div class="details">
+          <canvas class="route" data-route="${r.id}" style="height:200px;margin-top:12px"></canvas>
+          <div class="splits" style="margin-top:14px" data-splits="${r.id}"></div>
+          <label class="field" style="margin-top:14px">Name<input data-name="${r.id}" value="${esc(r.name || '')}" placeholder="${esc(rideTitle(r))}"></label>
+          <label class="field">Notes<textarea data-notes="${r.id}" placeholder="How did it feel? Weather, bike, route…">${esc(r.notes || '')}</textarea></label>
+          <div class="actions">
+            <button class="btn primary" data-save="${r.id}">Save details</button>
+            <button class="btn" data-gpx="${r.id}">Download GPX</button>
+            <button class="btn danger" data-del="${r.id}">Delete</button>
+          </div>
+        </div>
+      </div>`).join('');
+  }
+
+  $('#ride-list').addEventListener('click', (e) => {
+    const t = e.target;
+    const save = t.closest('[data-save]');
+    if (save) {
+      e.stopPropagation();
+      const id = save.dataset.save;
+      const name = document.querySelector(`[data-name="${id}"]`).value.trim();
+      const notes = document.querySelector(`[data-notes="${id}"]`).value.trim();
+      saveRides(rides().map((r) => (String(r.id) === id ? { ...r, name, notes } : r)));
+      save.textContent = 'Saved ✓'; setTimeout(() => { save.textContent = 'Save details'; }, 1200);
+      return;
+    }
+    const gpx = t.closest('[data-gpx]');
+    if (gpx) { e.stopPropagation(); const r = rides().find((x) => String(x.id) === gpx.dataset.gpx); download(`ride-${dayKey(r.startMs)}.gpx`, gpxFor(r), 'application/gpx+xml'); return; }
+    const del = t.closest('[data-del]');
+    if (del) { e.stopPropagation(); if (confirm('Delete this ride?')) { saveRides(rides().filter((x) => String(x.id) !== del.dataset.del)); renderRides(); renderDashboard(); } return; }
+    if (t.closest('input, textarea, label')) return;
+    const card = t.closest('.ride-card');
+    if (card) {
+      card.classList.toggle('open');
+      if (card.classList.contains('open')) {
+        const r = rides().find((x) => String(x.id) === card.dataset.id);
+        requestAnimationFrame(() => {
+          drawRoute(card.querySelector('canvas'), r.points, { empty: 'No GPS track saved' });
+          renderSplits(r.splits || [], card.querySelector('[data-splits]'));
+        });
+      }
+    }
+  });
+
+  // ---------- study ----------
+  let studyCard = null, studyTopic = 'All';
+  const getBoxes = () => read(K.study, {});
+  const boxOf = (b, id) => b[id] ?? 1;
+  const topics = () => ['All', ...new Set(activeCards().map((c) => c.topic).filter(Boolean))];
+  const deck = () => activeCards().filter((c) => studyTopic === 'All' || c.topic === studyTopic);
+
+  function renderStudy() {
+    studyBanner();
+    const b = getBoxes(), cards = deck();
+    const mastered = cards.filter((c) => boxOf(b, c.id) >= MAX_BOX).length;
+    $('#study-progress-label').textContent = `${mastered} of ${cards.length} mastered`;
+    $('#study-bar').style.width = `${cards.length ? mastered / cards.length * 100 : 0}%`;
+    $('#study-topic').textContent = studyTopic === 'All' ? '' : studyTopic;
+    $('#study-filters').innerHTML = topics().map((t) => `<button class="filter ${t === studyTopic ? 'on' : ''}" data-topic="${esc(t)}">${esc(t)}</button>`).join('');
+    studyCard = cards.filter((c) => boxOf(b, c.id) < MAX_BOX).reduce((best, c) => (!best || boxOf(b, c.id) < boxOf(b, best.id) ? c : best), null);
+    const done = !studyCard;
+    $('#study-done').classList.toggle('hidden', !done);
+    $('.flash-actions').classList.toggle('hidden', done);
+    $('.flashwrap').classList.toggle('hidden', done);
+    if (done) return;
+    $('#flash-front').textContent = studyCard.front;
+    $('#flash-back').textContent = studyCard.back;
+    $('#flash').classList.remove('flipped');
+    $('#show-btn').classList.remove('hidden');
+    $('#grade-btns').classList.add('hidden');
+  }
+
+  function flip(force) {
+    const on = $('#flash').classList.toggle('flipped', force ?? undefined);
+    $('#show-btn').classList.toggle('hidden', on);
+    $('#grade-btns').classList.toggle('hidden', !on);
+  }
+  function grade(gotIt) {
+    const b = getBoxes();
+    b[studyCard.id] = gotIt ? Math.min(MAX_BOX, boxOf(b, studyCard.id) + 1) : 1;
+    write(K.study, b); renderStudy();
+  }
+  $('#study-filters').addEventListener('click', (e) => { const t = e.target.closest('[data-topic]'); if (t) { studyTopic = t.dataset.topic; renderStudy(); } });
+  $('#flash').addEventListener('click', () => studyCard && flip());
+  $('#flash').addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && studyCard) { e.preventDefault(); flip(); } });
+  $('#show-btn').addEventListener('click', () => flip(true));
+  $('#gotit-btn').addEventListener('click', () => grade(true));
+  $('#again-btn').addEventListener('click', () => grade(false));
+  $('#reset-study').addEventListener('click', () => { const b = getBoxes(); deck().forEach((c) => delete b[c.id]); write(K.study, b); renderStudy(); });
+
+  // ---------- quiz with timer ----------
+  let quiz = { index: 0, score: 0, answered: false, picked: null, wrong: [], questions: [] };
+  let qTimer = null, qLeft = 0;
+
+  function startQuiz(questions = activeQuiz()) {
+    quiz = { index: 0, score: 0, answered: false, picked: null, wrong: [], questions };
+    renderQuiz();
+  }
+
+  function stopQuizTimer() { clearInterval(qTimer); qTimer = null; }
+  function startQuestionTimer() {
+    stopQuizTimer(); qLeft = QUIZ_SECONDS;
+    updateQuizTimer();
+    qTimer = setInterval(() => {
+      qLeft -= 0.1;
+      if (qLeft <= 0) { stopQuizTimer(); answer(-1); return; }
+      updateQuizTimer();
+    }, 100);
+  }
+  function updateQuizTimer() { $('#quiz-timer').style.width = `${Math.max(0, qLeft / QUIZ_SECONDS * 100)}%`; }
+
+  function renderQuiz() {
+    quizBanner();
+    const qs = quiz.questions, total = qs.length, body = $('#quiz-body');
+    $('#quiz-progress').textContent = quiz.index >= total ? 'Finished' : `Question ${quiz.index + 1} of ${total}`;
+    $('#quiz-score').textContent = `Score ${quiz.score}`;
+    $('#quiz-bar').style.width = `${total ? quiz.index / total * 100 : 0}%`;
+    if (!total) { stopQuizTimer(); updateQuizTimer(); body.innerHTML = '<div class="panel empty"><h2>No questions</h2><p class="muted">Add questions in data/content.js.</p></div>'; return; }
+
+    if (quiz.index >= total) {
+      stopQuizTimer(); $('#quiz-timer').style.width = '0%';
+      const pct = Math.round(quiz.score / total * 100);
+      body.innerHTML = `<div class="panel done"><span class="label">Result</span><div class="score-big">${quiz.score}/${total}</div>
+        <p class="muted">${pct >= 80 ? 'Strong round.' : pct >= 50 ? 'Solid. Review the misses.' : 'Keep going, repetition works.'}</p>
+        <div class="row" style="justify-content:center;flex-wrap:wrap">
+          ${quiz.wrong.length ? '<button class="btn primary" id="retry-wrong">Retry missed</button>' : ''}
+          <button class="btn" id="restart-quiz">Start over</button></div></div>`;
+      $('#restart-quiz').addEventListener('click', () => startQuiz());
+      $('#retry-wrong')?.addEventListener('click', () => startQuiz(quiz.wrong.slice()));
+      return;
+    }
+
+    const q = qs[quiz.index];
+    body.innerHTML = `<div class="panel">
+      <p class="q-text">${esc(q.q)}</p>
+      <div>${q.options.map((o, i) => `<button class="opt" data-i="${i}"><span class="letter">${'ABCD'[i] ?? i + 1}</span><span>${esc(o)}</span></button>`).join('')}</div>
+      <p class="feedback" id="feedback"></p>
+      <button class="btn primary wide" id="next-q" ${quiz.answered ? '' : 'disabled'}>${quiz.index + 1 === total ? 'See result' : 'Next question'}</button>
+    </div>`;
+    $$('#quiz-body .opt').forEach((b) => b.addEventListener('click', () => answer(Number(b.dataset.i))));
+    $('#next-q').addEventListener('click', () => { if (!quiz.answered) return; quiz.index++; quiz.answered = false; quiz.picked = null; renderQuiz(); startQuestionTimer(); });
+    if (quiz.answered) markAnswer(quiz.picked); else startQuestionTimer();
+  }
+
+  function answer(i) {
+    if (quiz.answered) return;
+    stopQuizTimer();
+    quiz.answered = true; quiz.picked = i;
+    const q = quiz.questions[quiz.index];
+    if (i === q.answer) quiz.score++; else quiz.wrong.push(q);
+    reportAnswer(q.qid, i === q.answer);
+    markAnswer(i);
+    $('#next-q').disabled = false;
+  }
+
+  function markAnswer(i) {
+    const q = quiz.questions[quiz.index];
+    $$('#quiz-body .opt').forEach((b, idx) => {
+      b.disabled = true;
+      if (idx === q.answer) b.classList.add('right');
+      if (idx === i && i !== q.answer) b.classList.add('wrong');
+    });
+    const fb = $('#feedback');
+    fb.textContent = i === q.answer ? 'Correct.' : i === -1 ? `Time's up. The answer is ${'ABCD'[q.answer]}.` : `Not quite. The answer is ${'ABCD'[q.answer]}.`;
+    fb.className = `feedback ${i === q.answer ? 'good' : 'bad'}`;
+    $('#quiz-score').textContent = `Score ${quiz.score}`;
+    updateQuizTimer();
+  }
+
+  // ---------- settings & backup ----------
+  function renderSettings() {
+    const s = settings();
+    $('#set-goal').value = s.goalKm; $('#set-units').value = s.units; $('#set-autopause').checked = s.autoPause;
+    $('#set-theme').value = s.theme;
+    renderAccount();
+  }
+  $('#set-goal').addEventListener('change', (e) => { const v = Math.max(10, Number(e.target.value) || 100); e.target.value = v; saveSettings({ goalKm: v }); });
+  $('#set-units').addEventListener('change', (e) => saveSettings({ units: e.target.value }));
+  $('#set-autopause').addEventListener('change', (e) => saveSettings({ autoPause: e.target.checked }));
+
+  $('#export-btn').addEventListener('click', () => {
+    download(`kxko-brief-backup-${dayKey(Date.now())}.json`, JSON.stringify({ app: 'kxko-brief', version: 4, exportedAt: new Date().toISOString(), settings: settings(), rides: rides(), study: getBoxes() }, null, 2), 'application/json');
+  });
+  $('#import-file').addEventListener('change', async (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    try {
+      const data = JSON.parse(await f.text());
+      if (data.app !== 'kxko-brief' || !Array.isArray(data.rides)) throw new Error('not a Kxko Brief backup');
+      saveRides(data.rides); if (data.study) write(K.study, data.study); if (data.settings) write(K.settings, data.settings);
+      applyTheme(); renderSettings(); alert(`Imported ${data.rides.length} rides.`);
+    } catch (err) { alert(`Import failed: ${err.message}`); }
+    e.target.value = '';
+  });
+  $('#wipe-btn').addEventListener('click', () => {
+    if (!confirm('Erase all rides, study progress and settings on this device?')) return;
+    [K.rides, K.study, K.settings].forEach((k) => localStorage.removeItem(k));
+    applyTheme(); renderSettings(); renderDashboard();
+  });
+
+  // ---------- offline ----------
+  if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+    navigator.serviceWorker.register('sw.js').catch(() => {});
+  }
+
+
+  // ---------- Supabase (study tests, sign-in, answer logging) ----------
+  // Uses the same tables and rules as the Android app. Access is enforced by Supabase row-level security.
+  const SB = window.KB_SUPABASE || { url: '', key: '' };
+  const SESSION_KEY = 'kb5.session';
+  const sbSession = () => read(SESSION_KEY, null);
+  const sbSignedIn = () => Boolean(sbSession()?.access_token);
+
+  const remote = { status: 'signed-out', error: '', cards: [], quiz: [], exams: 0 };
+  let liveLoaded = false;
+
+  const shuffle = (a) => { const b = a.slice(); for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; } return b; };
+  const tidy = (v) => (typeof v === 'string' ? v.trim() : '');
+
+  function decodeJwt(token) {
+    try { return JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))); } catch { return {}; }
+  }
+
+  async function sbFetch(path, { method = 'GET', body, token } = {}) {
+    const headers = { apikey: SB.key, 'Content-Type': 'application/json', Authorization: `Bearer ${token || sbSession()?.access_token || SB.key}` };
+    const res = await fetch(`${SB.url}${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined });
+    const text = await res.text();
+    const data = text ? JSON.parse(text) : null;
+    if (!res.ok) { const err = new Error(data?.message || data?.error_description || data?.msg || `HTTP ${res.status}`); err.status = res.status; throw err; }
+    return data;
+  }
+
+  async function refreshSession() {
+    const s = sbSession();
+    if (!s?.refresh_token) throw Object.assign(new Error('Session expired. Sign in again.'), { status: 401 });
+    const data = await sbFetch('/auth/v1/token?grant_type=refresh_token', { method: 'POST', body: { refresh_token: s.refresh_token }, token: SB.key });
+    saveSession(data);
+    return data.access_token;
+  }
+
+  // Calls the API with the stored login; on an expired token it refreshes once and retries.
+  async function sbCall(path, opts) {
+    try { return await sbFetch(path, opts); }
+    catch (err) {
+      if (err.status === 401 && sbSession()?.refresh_token) { const token = await refreshSession(); return sbFetch(path, { ...opts, token }); }
+      throw err;
+    }
+  }
+
+  function saveSession(data, email) {
+    const prev = sbSession() || {};
+    const access = data.access_token;
+    write(SESSION_KEY, {
+      access_token: access,
+      refresh_token: data.refresh_token || prev.refresh_token,
+      expires_at: Date.now() + (data.expires_in || 3600) * 1000,
+      email: email || prev.email || decodeJwt(access).email || '',
+      role: decodeJwt(access).app_metadata?.role || ''
+    });
+  }
+
+  async function signIn(email, password) {
+    const data = await sbFetch('/auth/v1/token?grant_type=password', { method: 'POST', body: { email: email.trim(), password }, token: SB.key });
+    if (!data?.access_token) throw new Error('Sign-in did not return a session.');
+    saveSession(data, email.trim());
+  }
+
+  function signOut() {
+    localStorage.removeItem(SESSION_KEY);
+    liveLoaded = false;
+    remote.status = 'signed-out'; remote.cards = []; remote.quiz = [];
+    renderSettings(); renderStudy(); renderQuiz();
+  }
+
+  async function loadLive(force = false) {
+    if (!SB.url || !SB.key) { remote.status = 'not-configured'; return; }
+    if (!sbSignedIn()) { remote.status = 'signed-out'; remote.cards = []; remote.quiz = []; return; }
+    if (liveLoaded && !force) return;
+    remote.status = 'loading';
+    try {
+      const today = dayKey(Date.now());
+      const exams = await sbCall(`/rest/v1/exams?select=id,subject,exam_date,topics&exam_date=gte.${today}&order=exam_date.asc`);
+      remote.exams = exams.length;
+      const subjectOf = Object.fromEntries(exams.map((e) => [e.id, tidy(e.subject) || 'Test']));
+      const rows = exams.length ? await sbCall(`/rest/v1/exam_questions?select=id,exam_id,kind,payload&exam_id=in.(${exams.map((e) => e.id).join(',')})`) : [];
+
+      const cards = [], quiz = [];
+      for (const row of rows) {
+        const p = row.payload || {};
+        const subject = subjectOf[row.exam_id] || 'Test';
+        if (row.kind === 'cover') {
+          const front = tidy(p.front), back = tidy(p.back);
+          if (front && back) cards.push({ id: row.id, topic: subject, front, back, explain: tidy(p.explain) });
+        } else if (row.kind === 'choice') {
+          const prompt = tidy(p.question), raw = Array.isArray(p.options) ? p.options.map(String) : [];
+          if (!prompt || !Number.isInteger(p.answer) || p.answer < 0 || p.answer >= raw.length || raw.length < 3) continue;
+          const correct = raw[p.answer];
+          const options = shuffle([...shuffle(raw.filter((o) => o !== correct)).slice(0, 2), correct]);
+          quiz.push({ qid: row.id, subject, q: prompt, options, answer: options.indexOf(correct), explain: tidy(p.explain) });
+        } else if (row.kind === 'match') {
+          const pairs = Array.isArray(p.pairs) ? p.pairs : [];
+          const matches = [...new Set(pairs.map((x) => tidy(x?.match)).filter(Boolean))];
+          pairs.forEach((pair) => {
+            const term = tidy(pair?.term), match = tidy(pair?.match);
+            if (!term || !match) return;
+            const others = matches.filter((m) => m !== match);
+            if (others.length < 2) return;
+            const options = shuffle([...shuffle(others).slice(0, 2), match]);
+            quiz.push({ qid: row.id, subject, q: `Which explanation fits “${term}”?`, options, answer: options.indexOf(match), explain: tidy(pair.explain) });
+          });
+        }
+      }
+      remote.cards = cards; remote.quiz = quiz;
+      remote.status = exams.length ? (quiz.length || cards.length ? 'live' : 'no-questions') : 'no-exams';
+      remote.error = '';
+    } catch (err) {
+      remote.status = 'error'; remote.error = err.message; remote.cards = []; remote.quiz = [];
+    }
+    liveLoaded = true;
+    renderStudy(); renderQuiz(); renderSettings();
+  }
+
+  function reportAnswer(qid, correct) {
+    if (!qid || !sbSignedIn()) return;
+    sbCall('/rest/v1/rpc/record_exam_answer', { method: 'POST', body: { q_id: qid, was_right: correct } }).catch(() => { /* best effort, like the app */ });
+  }
+
+  // Which content the Study and Quiz tabs use right now.
+  function activeCards() { return remote.cards.length ? remote.cards : content.study; }
+  function activeQuiz() { return remote.quiz.length ? remote.quiz : content.cycling; }
+
+  function banner(id, kind, text, showSignIn = true) {
+    const el = $(id);
+    const button = showSignIn && kind !== 'live' ? '<button class="btn small-btn" data-goto="settings">Sign in</button>' : '';
+    el.className = `banner ${kind === 'live' ? 'live' : kind === 'error' ? 'error' : 'demo'}`;
+    el.innerHTML = `${esc(text)}${button}`;
+  }
+
+  function studyBanner() {
+    const s = remote.status;
+    if (s === 'live') return banner('#study-banner', 'live', `Your upcoming tests: ${remote.cards.length} cards from ${remote.exams} test${remote.exams === 1 ? '' : 's'}.`, false);
+    if (s === 'loading') return banner('#study-banner', 'demo', 'Loading your tests…', false);
+    if (s === 'no-exams') return banner('#study-banner', 'demo', 'No upcoming tests in your account. Showing demo cards.');
+    if (s === 'no-questions') return banner('#study-banner', 'demo', 'Your upcoming tests have no flashcards yet. Showing demo cards.');
+    if (s === 'error') return banner('#study-banner', 'error', `Could not load your tests: ${remote.error}. Showing demo cards.`);
+    if (s === 'not-configured') return banner('#study-banner', 'demo', 'Supabase is not configured. Showing demo cards.', false);
+    return banner('#study-banner', 'demo', 'Showing demo cards. Sign in to study your real tests.');
+  }
+
+  function quizBanner() {
+    const s = remote.status;
+    if (s === 'live') return banner('#quiz-banner', 'live', `Your upcoming tests: ${remote.quiz.length} questions.`, false);
+    if (s === 'loading') return banner('#quiz-banner', 'demo', 'Loading your tests…', false);
+    if (s === 'no-exams') return banner('#quiz-banner', 'demo', 'No upcoming tests in your account. Showing demo questions.');
+    if (s === 'no-questions') return banner('#quiz-banner', 'demo', 'Your tests have no multiple-choice questions yet. Showing demo questions.');
+    if (s === 'error') return banner('#quiz-banner', 'error', `Could not load your tests: ${remote.error}. Showing demo questions.`);
+    if (s === 'not-configured') return banner('#quiz-banner', 'demo', 'Supabase is not configured. Showing demo questions.', false);
+    return banner('#quiz-banner', 'demo', 'Showing demo questions. Sign in to practise your real tests.');
+  }
+
+  $('#signin-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('#si-submit'), err = $('#si-error');
+    btn.disabled = true; err.textContent = ''; err.className = 'small';
+    try {
+      await signIn($('#si-email').value, $('#si-password').value);
+      $('#si-password').value = '';
+      await loadLive(true);
+      renderSettings();
+    } catch (ex) {
+      err.textContent = ex.message; err.className = 'small error';
+    } finally { btn.disabled = false; }
+  });
+  $('#signout-btn').addEventListener('click', signOut);
+
+  function renderAccount() {
+    const s = sbSession();
+    $('#set-role').textContent = s?.access_token
+      ? `Signed in as ${s.email || 'your account'}. Your upcoming tests load into Study and Quiz.`
+      : 'Not signed in. Study and Quiz show demo content until you sign in.';
+    $('#signin-form').classList.toggle('hidden', Boolean(s?.access_token));
+    $('#signout-btn').classList.toggle('hidden', !s?.access_token);
+  }
+
+  // ---------- start ----------
+  try { applyTheme(); } catch (err) { console.error('Kxko: theme', err); }
+  loadLive();
+  const initial = location.hash.replace('#', '');
+  go(initial || 'dashboard');
 })();
