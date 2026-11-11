@@ -147,24 +147,33 @@
   }
 
   // ---------- ride recording ----------
-  const live = { active: false, paused: false, autoPaused: false, startMs: 0, elapsed: 0, distanceM: 0, climbM: 0, speed: 0, maxSpeed: 0, points: [], splits: [], lastSplitSec: 0, stoppedFor: 0, watchId: null, timer: null, wake: null };
+  const live = { active: false, paused: false, autoPaused: false, startMs: 0, elapsed: 0, movingSec: 0, pauseCount: 0, distanceM: 0, climbM: 0, speed: 0, maxSpeed: 0, points: [], splits: [], lastSplitSec: 0, stoppedFor: 0, watchId: null, timer: null, wake: null };
 
   function onPosition(pos) {
     if (!live.active) return;
     const c = pos.coords;
     if (c.accuracy && c.accuracy > MAX_ACCURACY_M) return;
-    const p = { lat: c.latitude, lon: c.longitude, alt: typeof c.altitude === 'number' ? c.altitude : null };
+    const p = {
+      t: pos.timestamp || Date.now(),
+      lat: c.latitude, lon: c.longitude,
+      alt: typeof c.altitude === 'number' ? c.altitude : null,
+      spd: typeof c.speed === 'number' && c.speed >= 0 ? c.speed : null,
+      acc: typeof c.accuracy === 'number' ? Math.round(c.accuracy) : null,
+      hdg: typeof c.heading === 'number' && !Number.isNaN(c.heading) ? Math.round(c.heading) : null,
+      paused: live.paused,
+    };
     const last = live.points[live.points.length - 1];
     if (last) {
       const step = haversine(last, p);
-      if (step < MIN_STEP_M) return;
-      if (!live.paused) {
+      if (step < MIN_STEP_M && !last.paused === !p.paused) return;   // ignore GPS jitter while standing still
+      // Distance and climb only count while riding. The step from a paused point is never added.
+      if (!live.paused && !last.paused) {
         live.distanceM += step;
         if (last.alt != null && p.alt != null && p.alt - last.alt > MIN_CLIMB_M) live.climbM += p.alt - last.alt;
       }
     }
-    if (!live.paused) live.points.push(p);
-    live.speed = typeof c.speed === 'number' && c.speed >= 0 ? c.speed : 0;
+    live.points.push(p);
+    live.speed = p.spd ?? 0;
     if (!live.paused) live.maxSpeed = Math.max(live.maxSpeed, live.speed);
     while (live.distanceM >= (live.splits.length + 1) * 1000) {
       live.splits.push({ km: live.splits.length + 1, sec: live.elapsed - live.lastSplitSec });
@@ -181,7 +190,10 @@
       if (s.autoPause && !live.paused && live.stoppedFor >= STOP_AFTER_SEC) { live.paused = true; live.autoPaused = true; }
       if (live.autoPaused && live.paused && live.speed >= STOP_SPEED_MPS) { live.paused = false; live.autoPaused = false; }
     }
-    if (!live.paused) live.elapsed++;
+    if (!live.paused) {
+      live.elapsed++;
+      if (live.speed >= STOP_SPEED_MPS) live.movingSec++;
+    }
     updateRideUI();
   }
 
@@ -201,7 +213,7 @@
   function startRide() {
     if (!('geolocation' in navigator)) { $('#ride-note').textContent = 'This browser cannot access GPS.'; return; }
     saveSettings({ autoPause: $('#opt-autopause').checked });
-    Object.assign(live, { active: true, paused: false, autoPaused: false, startMs: Date.now(), elapsed: 0, distanceM: 0, climbM: 0, speed: 0, maxSpeed: 0, points: [], splits: [], lastSplitSec: 0, stoppedFor: 0 });
+    Object.assign(live, { active: true, paused: false, autoPaused: false, startMs: Date.now(), elapsed: 0, movingSec: 0, pauseCount: 0, distanceM: 0, climbM: 0, speed: 0, maxSpeed: 0, points: [], splits: [], lastSplitSec: 0, stoppedFor: 0 });
     live.watchId = navigator.geolocation.watchPosition(onPosition, (err) => { $('#ride-note').textContent = `GPS: ${err.message}`; }, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
     live.timer = setInterval(tick, 1000);
     keepAwake(true);
@@ -232,6 +244,9 @@
     $('#dist').parentElement.querySelector('.unit').textContent = unit();
     $('#avg').textContent = fmtSpeed(live.elapsed > 0 ? live.distanceM / live.elapsed : 0);
     $('#climb').textContent = live.climbM.toFixed(0);
+    $('#moving').textContent = fmtTime(live.movingSec);
+    $('#maxspd').textContent = fmtSpeed(live.maxSpeed);
+    $('#pauses').textContent = live.pauseCount;
     $('#pause-btn').textContent = live.paused ? 'Resume' : 'Pause';
     $('#rec-label').textContent = live.autoPaused ? 'Auto-paused' : live.paused ? 'Paused' : 'Recording';
     $('#rec-dot').classList.toggle('paused', live.paused);
@@ -248,7 +263,7 @@
   }
 
   $('#start-btn').addEventListener('click', startRide);
-  $('#pause-btn').addEventListener('click', () => { live.paused = !live.paused; live.autoPaused = false; updateRideUI(); });
+  $('#pause-btn').addEventListener('click', () => { if (!live.paused) live.pauseCount++; live.paused = !live.paused; live.autoPaused = false; updateRideUI(); });
   $('#finish-btn').addEventListener('click', finishRide);
   $('#opt-autopause').addEventListener('change', (e) => saveSettings({ autoPause: e.target.checked }));
   window.addEventListener('resize', () => { if (live.active) updateRideUI(); });
@@ -309,6 +324,7 @@
           <label class="field">Notes<textarea data-notes="${r.id}" placeholder="How did it feel? Weather, bike, route…">${esc(r.notes || '')}</textarea></label>
           <div class="actions">
             <button class="btn primary" data-save="${r.id}">Save details</button>
+            <button class="btn primary" data-open="${r.id}">Open map and share</button>
             <button class="btn" data-gpx="${r.id}">Download GPX</button>
             <button class="btn danger" data-del="${r.id}">Delete</button>
           </div>
@@ -331,6 +347,8 @@
       save.textContent = 'Saved ✓'; setTimeout(() => { save.textContent = 'Save details'; }, 1200);
       return;
     }
+    const open = t.closest('[data-open]');
+    if (open) { e.stopPropagation(); const r = rides().find((x) => String(x.id) === open.dataset.open); if (r) window.KB_RIDES?.open(r); return; }
     const gpx = t.closest('[data-gpx]');
     if (gpx) { e.stopPropagation(); const r = rides().find((x) => String(x.id) === gpx.dataset.gpx); download(`ride-${dayKey(r.startMs)}.gpx`, gpxFor(r), 'application/gpx+xml'); return; }
     const del = t.closest('[data-del]');
@@ -510,6 +528,7 @@
   });
 
   function renderSettings() {
+    renderAppSettings();
     renderOwnerSettings();
     const s = settings();
     $('#set-goal').value = s.goalKm; $('#set-units').value = s.units; $('#set-autopause').checked = s.autoPause;
@@ -729,9 +748,14 @@
     if (remote.status === 'error') { note.textContent = ''; box.textContent = `Couldn't load your tests: ${remote.error}`; return; }
     if (!remote.examList.length) { note.textContent = ''; box.textContent = 'No upcoming tests in your account.'; return; }
     const withItems = remote.examList.filter((e) => e.count > 0).length;
-    note.textContent = `${withItems} of ${remote.examList.length} with items`;
+    const today = dayKey(Date.now());
+    const next = remote.examList.find((e) => e.date >= today);
+    const days = next ? Math.round((new Date(next.date + 'T12:00:00') - new Date(today + 'T12:00:00')) / 86400000) : null;
+    note.innerHTML = next
+      ? `<span class="countdown">${days === 0 ? 'Today' : days === 1 ? 'Tomorrow' : `In ${days} days`}: ${esc(next.subject)}</span> · ${withItems} of ${remote.examList.length} with items`
+      : `${withItems} of ${remote.examList.length} with items`;
     box.innerHTML = remote.examList.map((e) => `
-      <div class="test-row">
+      <div class="test-row" style="--subj:${esc(subjectColor(e.subject))}">
         <div class="test-date">${esc(new Date(e.date + 'T12:00:00').toLocaleDateString(undefined, { day: 'numeric', month: 'short' }))}</div>
         <div class="test-main"><b>${esc(e.subject)}</b>${e.round ? ` <span class="muted small">· round ${e.round}</span>` : ''}
           <div class="muted small">${esc(e.topics || 'No topics yet')}</div></div>
@@ -760,6 +784,7 @@
     if (!isAdminUser() && currentTab === 'admin') go('dashboard');
     if (!canSeeTimetable() && currentTab === 'timetable') go('dashboard');
     if (!canSeeToday() && currentTab === 'today') go('dashboard');
+    applyTabPrefs();
   }
 
   // Shared API for the admin module (js/admin.js). Uses the same login and refresh logic.
@@ -767,7 +792,7 @@
     const s = sbSession();
     if (s?.refresh_token && s.expires_at - Date.now() < 60000) await refreshSession();
   }
-  window.kbApi = { call: sbCall, ensureFresh, session: sbSession, SB, esc, isOwner, moduleOn, setModule, weatherPlace, setWeatherPlace, modules: () => CFG.modules, ownerEmail: () => CFG.ownerEmail };
+  window.kbApi = { rides, call: sbCall, ensureFresh, session: sbSession, SB, esc, isOwner, moduleOn, setModule, weatherPlace, setWeatherPlace, modules: () => CFG.modules, ownerEmail: () => CFG.ownerEmail };
 
   function renderAccount() {
     refreshAdminTab();
@@ -828,11 +853,84 @@
     }
   }
 
+
+  // Safety net: if a panel still says "Loading…" after 10 seconds, say what went wrong instead of spinning forever.
+  setTimeout(() => {
+    $$('#upcoming-tests, #today-weather, #today-briefing, #today-homework, #examples-list, #reviews-list, #questions-list, #requests-list, #tt-lessons, #tt-changes, #tt-homework')
+      .forEach((el) => {
+        if (/^Loading/.test(el.textContent.trim())) {
+          el.textContent = 'Did not load. Check the internet connection, then reload the page (or clear the site data in Settings → Safari).';
+        }
+      });
+  }, 10000);
+
+  // ---------- App preferences (Settings → App) ----------
+  const PREFS_KEY = 'kb5.prefs';
+  const TAB_LABELS = { dashboard: 'Home', ride: 'Ride', study: 'Study', quiz: 'Quiz', rides: 'Rides', today: 'Today', timetable: 'School', admin: 'Admin', settings: 'Settings' };
+  const DEFAULT_PREFS = { accent: '#c6f432', density: 'comfortable', defaultTab: 'dashboard', hiddenTabs: [], subjectColors: {} };
+  const prefs = () => ({ ...DEFAULT_PREFS, ...read(PREFS_KEY, {}) });
+  const savePrefs = (patch) => { write(PREFS_KEY, { ...prefs(), ...patch }); applyPrefs(); };
+
+  function applyTabPrefs() {
+    const hidden = new Set(prefs().hiddenTabs);
+    document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('tab-off', hidden.has(t.dataset.tab) && t.dataset.tab !== 'dashboard'));
+  }
+  function applyPrefs() {
+    const p = prefs();
+    const root = document.documentElement;
+    root.style.setProperty('--lime', p.accent);
+    root.dataset.density = p.density;
+    applyTabPrefs();
+  }
+
+  // Subject colour: Settings override, else the keyword table in data/config.js.
+  function subjectColor(name) {
+    const n = String(name || '').toLowerCase();
+    const rules = window.KB_SUBJECT_COLORS || [];
+    const overrides = prefs().subjectColors || {};
+    const rule = rules.find((r) => r.match.some((term) => n.includes(term)));
+    if (!rule) return '#94a3b8';
+    return overrides[rule.label] || rule.color;
+  }
+
+  function renderAppSettings() {
+    const p = prefs();
+    $('#pref-accent').value = p.accent;
+    $('#pref-density').value = p.density;
+    $('#pref-default-tab').innerHTML = Object.keys(TAB_LABELS).map((k) => `<option value="${k}" ${p.defaultTab === k ? 'selected' : ''}>${TAB_LABELS[k]}</option>`).join('');
+    $('#pref-tabs').innerHTML = Object.keys(TAB_LABELS).filter((k) => k !== 'dashboard' && k !== 'settings').map((k) => `
+      <label class="pref-row"><span>${TAB_LABELS[k]}</span><input type="checkbox" data-tab-toggle="${k}" ${p.hiddenTabs.includes(k) ? '' : 'checked'}></label>`).join('');
+    $('#pref-subjects').innerHTML = (window.KB_SUBJECT_COLORS || []).map((r) => `
+      <label class="pref-row"><span>${esc(r.label)}</span><input type="color" data-subject="${esc(r.label)}" value="${subjectColor(r.match[0])}"></label>`).join('');
+  }
+
+  $('#pref-accent').addEventListener('input', (e) => savePrefs({ accent: e.target.value }));
+  $('#pref-density').addEventListener('change', (e) => savePrefs({ density: e.target.value }));
+  $('#pref-default-tab').addEventListener('change', (e) => savePrefs({ defaultTab: e.target.value }));
+  $('#pref-tabs').addEventListener('change', (e) => {
+    const key = e.target.dataset.tabToggle;
+    if (!key) return;
+    const hidden = new Set(prefs().hiddenTabs);
+    e.target.checked ? hidden.delete(key) : hidden.add(key);
+    savePrefs({ hiddenTabs: [...hidden] });
+  });
+  $('#pref-subjects').addEventListener('input', (e) => {
+    const label = e.target.dataset.subject;
+    if (!label) return;
+    savePrefs({ subjectColors: { ...(prefs().subjectColors || {}), [label]: e.target.value } });
+  });
+  $('#pref-reset').addEventListener('click', () => {
+    if (!confirm('Reset the app look and tab settings to the defaults?')) return;
+    localStorage.removeItem(PREFS_KEY); applyPrefs(); renderAppSettings();
+  });
+
+  window.kbApi.subjectColor = subjectColor;
+
   // ---------- start ----------
-  try { applyTheme(); } catch (err) { console.error('Kxko: theme', err); }
+  try { applyTheme(); applyPrefs(); } catch (err) { console.error('Kxko: theme', err); }
   loadLive();
   syncRides();
   refreshAdminTab();
   const initial = location.hash.replace('#', '');
-  go(initial || 'dashboard');
+  go(initial || prefs().defaultTab || 'dashboard');
 })();
