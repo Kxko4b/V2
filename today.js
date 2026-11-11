@@ -62,38 +62,6 @@
     }
   }
 
-  // ---------- briefing ----------
-  function renderBriefingText(text) {
-    const lines = String(text || '').split('\n');
-    let html = '';
-    lines.forEach((raw) => {
-      const line = raw.trimEnd();
-      if (!line.trim()) { html += '<div class="br-gap"></div>'; return; }
-      const isHeading = /^[A-ZÄÖÜ][A-ZÄÖÜ \/&-]{2,}$/.test(line.trim());
-      html += isHeading ? `<div class="br-head">${esc(line.trim())}</div>` : `<div class="br-line">${esc(line)}</div>`;
-    });
-    return html;
-  }
-
-  async function loadBriefing() {
-    const box = $('#today-briefing');
-    const list = $('#today-briefing-history');
-    box.textContent = 'Loading briefing…';
-    try {
-      const rows = await api().call('/rest/v1/briefing_runs?select=id,run_at,date_key,status,summary,briefing&order=run_at.desc&limit=7');
-      if (!rows.length) { box.textContent = 'No briefing yet.'; list.innerHTML = ''; return; }
-      const latest = rows[0];
-      box.innerHTML = `
-        <div class="muted small">Run ${esc(new Date(latest.run_at).toLocaleString())} · status ${esc(latest.status)}</div>
-        <div class="briefing">${renderBriefingText(latest.briefing)}</div>`;
-      list.innerHTML = rows.slice(1).map((r) => `
-        <div class="today-row"><span>${esc(new Date(r.run_at).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }))}</span>
-        <span class="muted small">${esc(r.status)}</span></div>`).join('');
-    } catch (err) {
-      box.innerHTML = `<p class="bad small">Could not load the briefing: ${esc(err.message)}</p>`;
-    }
-  }
-
   // ---------- manual homework ----------
   async function loadHomework() {
     const box = $('#today-homework');
