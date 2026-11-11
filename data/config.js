@@ -18,3 +18,19 @@ window.KB_CONFIG = {
     { key: 'admin', label: 'Admin (examples, reviews, questions, requests)' },
   ],
 };
+
+/* Colours for school subjects. Matched by keyword (case-insensitive), so "Mathe", "Mathematik A-Kurs" both become maths.
+   Colours can be changed per subject in Settings. */
+window.KB_SUBJECT_COLORS = [
+  { match: ['mathe', 'math'], label: 'Maths', color: '#2563eb' },
+  { match: ['englisch', 'english'], label: 'English', color: '#eab308' },
+  { match: ['deutsch', 'german'], label: 'German', color: '#dc2626' },
+  { match: ['spanisch', 'spanish', 'fremdsprache'], label: 'Spanish', color: '#f97316' },
+  { match: ['physik', 'physics'], label: 'Physics', color: '#7c3aed' },
+  { match: ['chemie', 'chemistry'], label: 'Chemistry', color: '#16a34a' },
+  { match: ['biologie', 'biology', 'bio'], label: 'Biology', color: '#22c55e' },
+  { match: ['gl', 'gesellschaft', 'geschichte', 'history'], label: 'Society', color: '#a16207' },
+  { match: ['religion', 'ethik'], label: 'Religion / Ethics', color: '#64748b' },
+  { match: ['sport'], label: 'Sport', color: '#0891b2' },
+  { match: ['musik', 'bläser', 'blaser', 'music', 'ensemble'], label: 'Music', color: '#db2777' },
+];
