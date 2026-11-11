@@ -38,7 +38,7 @@
       const data = await api().call(`/functions/v1/untis-timetable?date=${yyyymmdd(d)}`);
       if (!data?.success) throw new Error(data?.error || 'Unknown error');
       $('#tt-status').textContent = `${data.lessonsChecked ?? data.timetable.length} lessons from WebUntis`;
-      renderChanges(data.changes || []);
+      renderChanges(data.changes || [], data.timetable || []);
       renderLessons(data.timetable || []);
       renderHomework(data.homework || []);
     } catch (err) {
@@ -47,19 +47,34 @@
     }
   }
 
-  function renderChanges(changes) {
+  // Changes are built from the lesson rows themselves, so they show even when the briefing already
+  // stored the latest snapshot. Server changes are merged in too, without duplicates.
+  function renderChanges(serverChanges, lessons) {
+    const fromLessons = [];
+    lessons.forEach((l) => {
+      if (l.cancelled) fromLessons.push({ type: 'ENTFALL', time: l.time, subject: l.subject, details: `${l.subject} is cancelled.` });
+      else if (l.changed) fromLessons.push({ type: 'VERTRETUNG', time: l.time, subject: l.subject,
+        details: `${l.expected || l.subject}: ${l.expectedTeacher || 'normal teacher'} → ${l.substituteTeacher || l.teacher || 'substitute'}` });
+    });
+    const seen = new Set(fromLessons.map((c) => `${c.type}|${c.time}|${c.subject}`));
+    const extra = serverChanges.filter((c) => !seen.has(`${c.type}|${c.time}|${c.subject}`));
+    const all = [...fromLessons, ...extra];
     const box = $('#tt-changes');
-    if (!changes.length) { box.innerHTML = '<p class="muted small">No changes since the last check.</p>'; return; }
-    box.innerHTML = changes.map((c) => {
-      const s = CHANGE_STYLE[c.type] || { text: c.title, cls: '' };
-      return `<div class="tt-change ${s.cls}"><strong>${esc(s.text)} · ${esc(c.time)}</strong><div class="small">${esc(c.details || c.subject)}</div></div>`;
+    if (!all.length) { box.innerHTML = '<p class="muted small">No changes today.</p>'; return; }
+    box.innerHTML = all.map((c) => {
+      const s = CHANGE_STYLE[c.type] || { text: c.title || c.type, cls: '' };
+      return `<div class="tt-change ${s.cls}"><strong>${esc(s.text)} · ${esc(c.time)}</strong><div class="small">${esc(c.details || c.subject || '')}</div></div>`;
     }).join('');
   }
+
+  // Subject colour: from the Settings override first, then the keyword table in data/config.js.
+  const subjectOf = (name) => api().subjectColor(name);
 
   function renderLessons(lessons) {
     const box = $('#tt-lessons');
     if (!lessons.length) { box.innerHTML = '<p class="muted small">No lessons on this day.</p>'; return; }
     box.innerHTML = lessons.map((l) => {
+      const colour = subjectOf(l.expected || l.subject);
       const subject = l.changed && l.expected !== l.subject
         ? `${esc(l.expected)} → ${esc(l.subject)}`
         : esc(l.subject);
@@ -68,10 +83,12 @@
         : esc(l.teacher || '');
       const badge = l.cancelled ? '<span class="tt-badge bad">Cancelled</span>'
         : l.changed ? '<span class="tt-badge warn">Substitute</span>' : '';
+      const cross = l.cancelled ? '<svg class="tt-x" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="0" x2="100" y2="100"/><line x1="100" y1="0" x2="0" y2="100"/></svg>' : '';
       return `
-        <div class="tt-lesson ${l.cancelled ? 'cancelled' : ''}">
+        <div class="tt-lesson ${l.cancelled ? 'cancelled' : ''}" style="--subj:${esc(colour)}">
           <div class="tt-time">${esc(l.time)}</div>
           <div class="tt-main"><strong>${subject}</strong> ${badge}<div class="muted small">${teacher}${l.room ? ` · ${esc(l.room)}` : ''}</div></div>
+          ${cross}
         </div>`;
     }).join('');
   }
@@ -80,7 +97,7 @@
     const box = $('#tt-homework');
     if (!items.length) { box.innerHTML = '<p class="muted small">No homework in the next days.</p>'; return; }
     box.innerHTML = items.map((h) => `
-      <div class="tt-hw">
+      <div class="tt-hw" style="--subj:${esc(subjectOf(h.subject))}">
         <strong>${esc(h.subject)}</strong> <span class="muted small">· due ${esc(h.dueDate || '')}</span>
         <div>${esc(h.text)}</div>
       </div>`).join('');
