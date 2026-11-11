@@ -1,8 +1,8 @@
 /* Offline support. Network first: a fresh copy is used whenever the phone is online,
    and the cache is only the fallback. A missing file never stops the service worker from installing. */
-const CACHE = 'kb5-v10';
+const CACHE = 'kb5-v13';
 const SHELL = ['./', './index.html', './styles.css', './app.js', './data/config.js', './data/content.js',
-  './admin.js', './timetable.js', './today.js', './briefing.js', './manifest.json', './icon.svg'];
+  './admin.js', './timetable.js', './today.js', './briefing.js', './ride-detail.js', './manifest.json', './icon.svg'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) =>
