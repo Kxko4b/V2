@@ -10,7 +10,7 @@ window.KB_SUPABASE = {
 window.KB_CONFIG = {
   ownerEmail: 'haleannson@gmail.com',
   // Default weather place. Can be changed in Settings → Owner settings.
-  weather: { name: 'Leonberg', lat: 48.80, lon: 9.02 },
+  weather: { name: 'Gießen', lat: 48.80, lon: 9.02 },
   // Owner tabs that can be switched on or off in Settings.
   modules: [
     { key: 'today', label: 'Today (weather, briefing, homework)' },
