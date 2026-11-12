@@ -381,3 +381,25 @@ html[data-density="compact"] .split, html[data-density="compact"] .test-row { pa
 .rd-legend .lg { width: 90px; height: 6px; border-radius: 99px; background: linear-gradient(90deg, hsl(130 85% 50%), hsl(65 85% 50%), hsl(0 85% 50%)); display: inline-block; }
 .rd-share .row { margin-top: 10px; }
 @media (max-width: 480px) { .rd-grid { grid-template-columns: repeat(2, 1fr); } .rd-hero b { font-size: 60px; } }
+
+
+/* Business live updates and Views Log */
+#admin-views .views-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
+#admin-views .views-heading h2 { margin-bottom:4px; }
+.views-live { display:inline-flex; align-items:center; gap:7px; padding:6px 10px; border-radius:999px; background:var(--lime-soft); color:var(--lime); font-size:10px; font-weight:800; letter-spacing:.1em; }
+.views-live i { width:7px; height:7px; border-radius:50%; background:currentColor; box-shadow:0 0 0 4px color-mix(in srgb, currentColor 16%, transparent); }
+.views-block { margin-top:20px; }
+.views-block h3 { margin:0 0 10px; font:700 12px var(--head); text-transform:uppercase; letter-spacing:.08em; color:var(--lime); }
+.views-page,.views-visit { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 0; border-top:1px solid var(--line); font-size:13px; }
+.views-page span,.views-visit span { min-width:0; overflow-wrap:anywhere; }
+.views-page b { font:700 15px var(--head); color:var(--lime); }
+.views-visit time { color:var(--dim); white-space:nowrap; font-size:11px; }
+.views-updated { text-align:right; margin:14px 0 0; }
+#admin-views .biz-stats { grid-template-columns:repeat(3,minmax(0,1fr)); }
+@media(max-width:420px) { #admin-views .biz-stats { gap:6px; } #admin-views .biz-stat { padding:10px 8px; } #admin-views .biz-stat b { font-size:19px; } }
+@media(prefers-reduced-motion:no-preference) {
+  #admin-examples .admin-item,#admin-reviews .admin-item,#admin-questions .admin-item,#admin-requests .admin-item {
+    animation: businessDropIn .48s cubic-bezier(.2,.8,.2,1) both;
+  }
+  @keyframes businessDropIn { from { opacity:0; transform:translateY(-22px) scale(.985); } to { opacity:1; transform:translateY(0) scale(1); } }
+}

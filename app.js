@@ -6,7 +6,7 @@
   const DAY = 86_400_000;
   const MAX_ACCURACY_M = 25, MIN_STEP_M = 2, MIN_CLIMB_M = 0.8;
   const STOP_SPEED_MPS = 0.8, STOP_AFTER_SEC = 8;
-  const MAX_BOX = 5, QUIZ_SECONDS = 15;
+  const MAX_BOX = 5, QUIZ_SECONDS = 30;
   const K = { rides: 'kb4.rides', study: 'kb4.study', settings: 'kb4.settings' };
 
   const $ = (s) => document.querySelector(s);

@@ -22,7 +22,7 @@
   document.querySelectorAll('[data-admin-tab]').forEach((btn) => btn.addEventListener('click', () => {
     const name = btn.dataset.adminTab;
     document.querySelectorAll('[data-admin-tab]').forEach((b) => b.classList.toggle('on', b === btn));
-    ['examples', 'reviews', 'questions', 'requests'].forEach((t) => $(`#admin-${t}`).classList.toggle('hidden', t !== name));
+    ['examples', 'reviews', 'questions', 'requests', 'views'].forEach((t) => $(`#admin-${t}`).classList.toggle('hidden', t !== name));
     load(name);
   }));
 
@@ -32,6 +32,7 @@
     if (name === 'reviews') loadReviews();
     if (name === 'questions') loadQuestions();
     if (name === 'requests') loadRequests();
+    if (name === 'views') loadViews();
   }
 
   function refresh() { if (isAdmin()) load(active); }
@@ -189,6 +190,57 @@
       }).join('');
     } catch (err) { box.textContent = `Could not load: ${err.message}`; }
   }
+
+
+  // ---------- views log ----------
+  async function loadViews() {
+    const box = $('#views-list');
+    if (!box) return;
+    try {
+      const rows = await api().call('/rest/v1/page_views?select=id,page,created_at&order=created_at.desc&limit=300');
+      const todayKey = new Date().toLocaleDateString();
+      const today = rows.filter((r) => new Date(r.created_at).toLocaleDateString() === todayKey).length;
+      const pages = new Map();
+      rows.forEach((r) => { const key = r.page || '(unknown page)'; pages.set(key, (pages.get(key) || 0) + 1); });
+      const pageRows = [...pages.entries()].sort((a, b) => b[1] - a[1]);
+      box.innerHTML = `
+        <div class="biz-stats">
+          <div class="biz-stat"><span>Recent views</span><b>${rows.length}${rows.length === 300 ? '+' : ''}</b></div>
+          <div class="biz-stat"><span>Today (loaded)</span><b>${today}</b></div>
+          <div class="biz-stat"><span>Pages visited</span><b>${pages.size}</b></div>
+        </div>
+        <div class="views-block">
+          <h3>Popular pages · recent 300</h3>
+          ${pageRows.length ? pageRows.map(([page, count]) => `
+            <div class="views-page"><span title="${esc(page)}">${esc(page)}</span><b>${count}</b></div>`).join('') : '<p class="muted small">No page views recorded yet.</p>'}
+        </div>
+        <div class="views-block">
+          <h3>Latest visits</h3>
+          ${rows.length ? rows.slice(0, 60).map((r) => `
+            <div class="views-visit"><span>${esc(r.page || '(unknown page)')}</span><time>${fmt(r.created_at)}</time></div>`).join('') : '<p class="muted small">No visits yet.</p>'}
+        </div>
+        <p class="muted tiny views-updated">Updated automatically · ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}</p>`;
+    } catch (err) {
+      box.innerHTML = `<p class="small error">Could not load views: ${esc(err.message)}</p><p class="muted tiny">Check that the owner account is signed in and has permission to read page_views.</p>`;
+    }
+  }
+
+  // Keep the open Business panel fresh automatically. Refreshing only the active
+  // list avoids unnecessary requests and preserves edits in other panels.
+  let liveRefreshBusy = false;
+  setInterval(async () => {
+    if (!isAdmin() || document.visibilityState !== 'visible' || liveRefreshBusy) return;
+    const adminView = $('#view-admin');
+    if (!adminView?.classList.contains('active')) return;
+    liveRefreshBusy = true;
+    try {
+      if (active === 'examples' && !$('#admin-examples .admin-edit:not(.hidden)')) await loadExamples();
+      else if (active === 'reviews' && !$('#admin-reviews .admin-edit:not(.hidden)')) await loadReviews();
+      else if (active === 'questions' && !$('#admin-questions textarea:focus, #admin-questions select:focus')) await loadQuestions();
+      else if (active === 'requests' && !$('#admin-requests .admin-edit:not(.hidden)') && !$('#admin-requests select:focus')) await loadRequests();
+      else if (active === 'views') await loadViews();
+    } finally { liveRefreshBusy = false; }
+  }, 8000);
 
   // ---------- one click handler for everything ----------
   document.addEventListener('click', async (e) => {
