@@ -1,6 +1,6 @@
 /* Offline support. Network first: a fresh copy is used whenever the phone is online,
    and the cache is only the fallback. A missing file never stops the service worker from installing. */
-const CACHE = 'kb5-v13';
+const CACHE = 'kb5-v14';
 const SHELL = ['./', './index.html', './styles.css', './app.js', './data/config.js', './data/content.js',
   './admin.js', './timetable.js', './today.js', './briefing.js', './ride-detail.js', './manifest.json', './icon.svg'];
 
