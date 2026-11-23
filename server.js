@@ -1,4 +1,4 @@
-/* Server manager (Admin → Server). Preset buttons, PM2 start/restart, and a command bar.
+/* Server manager (Admin → Server). Preset buttons, PM2 start/restart, and a command bar that streams output live.
    Every request is stored in Supabase and answered by the server script. Owner only. */
 (() => {
   'use strict';
@@ -11,10 +11,15 @@
     { id: 'pm2_start', label: 'Start kxko-test', hint: 'Starts the PM2 process if stopped', target: 'kxko-test', danger: true },
   ];
   const LABELS = Object.fromEntries(PRESETS.map((p) => [p.id, p.label]));
+  const POLL_MS = 1500;
+  const MAX_WAIT_MS = 11 * 60 * 1000;
+
   const out = () => document.getElementById('server-output');
   const section = () => document.getElementById('admin-server');
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  let activeJob = null; // request id of the command that is running now
 
   function renderPresets() {
     const box = document.getElementById('server-presets');
@@ -24,7 +29,7 @@
     ).join('');
   }
 
-  // Command bar: type a shell command, confirm it, and it runs on the server.
+  // Command bar: type a shell command, confirm it, and watch the output stream in.
   function renderCommandBar() {
     if (document.getElementById('server-command-form')) return;
     const host = section();
@@ -36,8 +41,11 @@
       <label class="field">Command
         <input id="server-command" maxlength="500" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="e.g. ls ~/server">
       </label>
-      <button class="btn primary wide" type="submit">Run command</button>
-      <p class="muted small">Runs as the Termux user on your phone. Each command asks for confirmation first. Commands longer than 20 seconds are stopped.</p>`;
+      <div class="row">
+        <button class="btn primary grow" type="submit" id="server-run">Run command</button>
+        <button class="btn danger" type="button" id="server-stop" hidden>Stop</button>
+      </div>
+      <p class="muted small">Runs as the Termux user on your phone. Each command asks for confirmation first. The folder you used last carries over. Commands stop after 10 minutes.</p>`;
     const pre = document.getElementById('server-output');
     host.querySelector('.panel').insertBefore(form, pre);
     form.addEventListener('submit', (e) => {
@@ -45,8 +53,17 @@
       const command = document.getElementById('server-command').value.trim();
       if (!command) return;
       if (!confirm(`Run this command on the server?\n\n${command}`)) return;
-      send({ preset: 'custom', command }, `Command: ${command}`);
+      runCommand(command);
     });
+    document.getElementById('server-stop').addEventListener('click', stopCommand);
+  }
+
+  function setRunning(on) {
+    const stop = document.getElementById('server-stop');
+    const run = document.getElementById('server-run');
+    if (stop) stop.hidden = !on;
+    if (run) run.disabled = on;
+    out().classList.toggle('live', on);
   }
 
   async function sendRequest(body) {
@@ -60,16 +77,18 @@
     return rows[0].id;
   }
 
-  async function waitForResult(id) {
+  // Waits for the server to answer, showing output as it arrives. Returns the final text.
+  async function waitForResult(id, label) {
     const started = Date.now();
-    while (Date.now() - started < 90000) {
-      await sleep(2000);
+    while (Date.now() - started < MAX_WAIT_MS) {
+      await sleep(POLL_MS);
       const rows = await window.kbApi.call(`/rest/v1/server_requests?id=eq.${encodeURIComponent(id)}&select=status,output`);
       const row = rows?.[0];
       if (!row) throw new Error('The request disappeared.');
       if (row.status === 'done') return row.output || '(no output)';
       if (row.status === 'error') return `Error:\n${row.output || 'The server reported an error.'}`;
-      out().textContent = `Waiting for the server… (${row.status})`;
+      if (row.output) out().textContent = `${label}\n\n${row.output}`;
+      else out().textContent = `${label}: waiting for the server… (${row.status})`;
     }
     throw new Error('The server did not answer in time. Check that the server script is running in Termux.');
   }
@@ -79,13 +98,39 @@
     try {
       const id = await sendRequest(body);
       out().textContent = `${label}: waiting for the server…`;
-      const result = await waitForResult(id);
+      const result = await waitForResult(id, label);
       out().textContent = `${label}\n\n${result}`;
     } catch (err) {
       out().textContent = `${label}: ${err.message}`;
     }
   }
 
+  async function runCommand(command) {
+    const label = `Command: ${command}`;
+    out().textContent = `${label}: sending request…`;
+    setRunning(true);
+    try {
+      activeJob = await sendRequest({ preset: 'custom', command });
+      const result = await waitForResult(activeJob, label);
+      out().textContent = `${label}\n\n${result}`;
+    } catch (err) {
+      out().textContent = `${label}: ${err.message}`;
+    } finally {
+      activeJob = null;
+      setRunning(false);
+    }
+  }
+
+  async function stopCommand() {
+    if (!activeJob) return;
+    try {
+      await sendRequest({ preset: 'stop', target: activeJob });
+    } catch (err) {
+      out().textContent += `\n\nCould not send stop: ${err.message}`;
+    }
+  }
+
+  // admin.js handles the four existing sections; this shows or hides the Server section alongside them.
   document.addEventListener('click', (e) => {
     const tab = e.target.closest('[data-admin-tab]');
     if (tab) {

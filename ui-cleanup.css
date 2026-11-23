@@ -1,8 +1,49 @@
-/* Kxko Brief v5 additions: sub-tabs, colour swatches, server presets and command bar. Loads after styles.css. */
+/* Kxko Brief v5 additions: sub-tabs, colour swatches, server presets, command bar, live output and motion.
+   Loads after styles.css. Motion respects the phone's "reduce motion" setting. */
 
 .hidden { display: none !important; }
 
-/* Sub-tabs inside Study, Rides and Planner */
+/* ---------- Motion ---------- */
+@keyframes view-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes rise { from { opacity: 0; transform: translateY(8px) scale(.99); } to { opacity: 1; transform: none; } }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+@keyframes shimmer { from { background-position: -200% 0; } to { background-position: 200% 0; } }
+
+.view.active { animation: view-in .35s cubic-bezier(.2,.7,.2,1) both; }
+.view.active > .panel,
+.view.active > .grid4,
+.view.active > .grid3,
+.view.active > .actions-col,
+.subview:not(.hidden) > .panel,
+.subview:not(.hidden) > .banner {
+  animation: rise .4s cubic-bezier(.2,.7,.2,1) both;
+}
+.view.active > .panel:nth-child(2) { animation-delay: .04s; }
+.view.active > .panel:nth-child(3) { animation-delay: .08s; }
+.view.active > .panel:nth-child(4) { animation-delay: .12s; }
+.view.active > .panel:nth-child(5) { animation-delay: .16s; }
+
+.panel { transition: transform .2s ease, border-color .2s ease, box-shadow .2s ease; }
+@media (hover: hover) {
+  .panel:hover { transform: translateY(-1px); }
+}
+.preset, .swatch, .btn, .action, .tab, .filter {
+  transition: transform .15s ease, background-color .2s ease, border-color .2s ease, color .2s ease, opacity .2s ease;
+}
+.preset:active, .btn:active, .action:active, .tab:active, .filter:active { transform: scale(.97); }
+
+/* Loading placeholders shimmer instead of a bare word */
+.loading-line {
+  display: block;
+  height: 12px;
+  border-radius: 6px;
+  margin: 8px 0;
+  background: linear-gradient(90deg, rgba(128,128,128,.12) 25%, rgba(128,128,128,.25) 50%, rgba(128,128,128,.12) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+
+/* ---------- Sub-tabs ---------- */
 .subtabs {
   display: flex;
   gap: 8px;
@@ -13,7 +54,7 @@
 .subtabs::-webkit-scrollbar { display: none; }
 .subtabs .filter { flex: 0 0 auto; }
 
-/* Colour swatches replace the native colour inputs */
+/* ---------- Colour swatches ---------- */
 .pref-block { display: flex; flex-direction: column; gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--line, rgba(255,255,255,.08)); }
 .pref-label { font-size: 14px; }
 .swatches { display: flex; flex-wrap: wrap; gap: 10px; }
@@ -27,9 +68,7 @@
   box-shadow: inset 0 0 0 2px rgba(0,0,0,.25);
   cursor: pointer;
   padding: 0;
-  transition: transform .15s ease, border-color .15s ease;
 }
-.swatch:active { transform: scale(.92); }
 .swatch.on { border-color: var(--text, #f4f6f3); transform: scale(1.08); }
 .swatch:focus-visible { outline: 2px solid var(--c); outline-offset: 2px; }
 .swatches.small .swatch { width: 26px; height: 26px; }
@@ -44,7 +83,7 @@
 .subject-row:last-child { border-bottom: 0; }
 .subject-name { font-weight: 600; font-size: 14px; padding-left: 10px; border-left: 3px solid var(--subj); }
 
-/* Server presets */
+/* ---------- Server presets ---------- */
 .presets { display: grid; grid-template-columns: 1fr; gap: 10px; margin: 12px 0; }
 .preset {
   display: flex;
@@ -60,7 +99,7 @@
   font: inherit;
   cursor: pointer;
 }
-.preset:active { transform: scale(.99); }
+.preset:hover { border-color: var(--lime, #c6f432); }
 .preset.warn { border-color: rgba(251,191,36,.45); }
 .server-output {
   white-space: pre-wrap;
@@ -70,11 +109,27 @@
   min-height: 48px;
   margin: 0;
   overflow-x: auto;
+  transition: box-shadow .3s ease;
+}
+.server-output.live { box-shadow: inset 0 0 0 1px var(--lime, #c6f432); }
+.server-output.live::before {
+  content: '● live';
+  display: block;
+  color: var(--lime, #c6f432);
+  animation: pulse 1.2s ease-in-out infinite;
+  margin-bottom: 6px;
 }
 
-/* Command bar */
+/* ---------- Command bar ---------- */
 .command-bar { display: flex; flex-direction: column; gap: 10px; margin: 14px 0 6px; }
-.command-bar input {
-  font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 14px;
+.command-bar input { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 14px; }
+
+/* ---------- Reduced motion: the phone setting turns animation off ---------- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
