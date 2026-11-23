@@ -1,4 +1,5 @@
-/* Server manager (Admin → Server). Draws the fixed presets, sends requests to Supabase, shows the server's reply. */
+/* Server manager (Admin → Server). Shows the server section when its tab is tapped, draws the fixed presets,
+   sends requests to Supabase and shows the server's reply. */
 (() => {
   'use strict';
   const PRESETS = [
@@ -8,6 +9,7 @@
   ];
   const LABELS = Object.fromEntries(PRESETS.map((p) => [p.id, p.label]));
   const out = () => document.getElementById('server-output');
+  const section = () => document.getElementById('admin-server');
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -44,8 +46,15 @@
     throw new Error('The server did not answer in time. Check that the server script is running in Termux.');
   }
 
+  // admin.js handles the four existing sections; this shows or hides the Server section alongside them.
   document.addEventListener('click', async (e) => {
-    if (e.target.closest('[data-admin-tab="server"]')) { renderPresets(); return; }
+    const tab = e.target.closest('[data-admin-tab]');
+    if (tab) {
+      const isServer = tab.dataset.adminTab === 'server';
+      section()?.classList.toggle('hidden', !isServer);
+      if (isServer) renderPresets();
+      return;
+    }
     const button = e.target.closest('[data-preset]');
     if (!button) return;
     const preset = button.dataset.preset;
