@@ -1,4 +1,4 @@
-/* Kxko Brief v4 · plain JavaScript, no build step. Data stays in this browser. */
+/* Kxko Brief v5 · plain JavaScript, no build step. Data stays in this browser. */
 (() => {
   'use strict';
 
@@ -9,8 +9,11 @@
   const MAX_BOX = 5, QUIZ_SECONDS = 15;
   const K = { rides: 'kb4.rides', study: 'kb4.study', settings: 'kb4.settings' };
 
+  // Old tab names still work (bookmarks, saved defaults). Each maps to a main tab plus a sub-section.
+  const ALIASES = { quiz: ['study', 'quiz'], ride: ['rides', 'record'], today: ['planner', 'today'], timetable: ['planner', 'school'] };
+
   const $ = (s) => document.querySelector(s);
-  const $$ = (s) => [...document.querySelectorAll(s)];
+  const $$ = (s, root = document) => [...root.querySelectorAll(s)];
   const read = (k, f) => { try { return JSON.parse(localStorage.getItem(k)) ?? f; } catch { return f; } };
   const write = (k, v) => localStorage.setItem(k, JSON.stringify(v));
   const pad = (n) => String(n).padStart(2, '0');
@@ -55,25 +58,49 @@
 
   // ---------- navigation ----------
   let currentTab = 'dashboard';
-  function go(tab) {
+
+  // Shows the sub-section named `sub` inside `tab` (or the first one) and returns its name.
+  function showSub(tab, sub) {
+    const view = $(`#view-${tab}`);
+    if (!view) return null;
+    const subs = $$('[data-sub-view]', view);
+    if (!subs.length) return null;
+    const want = subs.some((s) => s.dataset.subView === sub) ? sub : subs[0].dataset.subView;
+    subs.forEach((s) => s.classList.toggle('hidden', s.dataset.subView !== want));
+    $$('[data-sub-btn]', view).forEach((b) => b.classList.toggle('on', b.dataset.subBtn === want));
+    return want;
+  }
+
+  function go(tab, sub) {
+    if (ALIASES[tab]) [tab, sub] = ALIASES[tab];
     if (!$(`#view-${tab}`)) tab = 'dashboard';
+    if (tab === 'admin' && !isAdminUser()) tab = 'dashboard';
+    if (tab === 'planner' && !canSeePlanner()) tab = 'dashboard';
     currentTab = tab;
     $$('.view').forEach((v) => v.classList.toggle('active', v.id === `view-${tab}`));
     $$('.tab').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
     $('#page-title').textContent = $(`#view-${tab}`).dataset.title;
     history.replaceState(null, '', `#${tab}`);
     try { window.scrollTo(0, 0); } catch { /* ignore */ }
-    if (tab === 'admin' && !isAdminUser()) tab = 'dashboard';
-    if (tab === 'timetable' && !canSeeTimetable()) tab = 'dashboard';
-    if (tab === 'today' && !canSeeToday()) tab = 'dashboard';
-    currentTab = tab;
-    const renders = { admin: () => window.KB_ADMIN?.refresh(), timetable: () => window.KB_TIMETABLE?.refresh(), today: () => window.KB_TODAY?.refresh(), dashboard: renderDashboard, study: renderStudy, quiz: () => (quiz.questions.length ? renderQuiz() : startQuiz()), rides: renderRides, settings: renderSettings, ride: renderRideIdle };
-    try { renders[tab]?.(); } catch (err) { console.error('Kxko: could not draw', tab, err); }
-    if (tab !== 'quiz') stopQuizTimer();
+    const current = showSub(tab, sub);
+    try {
+      if (tab === 'dashboard') renderDashboard();
+      else if (tab === 'study') { if (current === 'quiz') (quiz.questions.length ? renderQuiz() : startQuiz()); else renderStudy(); }
+      else if (tab === 'rides') { if (current === 'history') renderRides(); else renderRideIdle(); }
+      else if (tab === 'planner') { if (current === 'school') window.KB_TIMETABLE?.refresh(); else window.KB_TODAY?.refresh(); }
+      else if (tab === 'admin') window.KB_ADMIN?.refresh();
+      else if (tab === 'settings') renderSettings();
+    } catch (err) { console.error('Kxko: could not draw', tab, err); }
+    if (!(tab === 'study' && current === 'quiz')) stopQuizTimer();
   }
   $$('.tab').forEach((b) => b.addEventListener('click', () => go(b.dataset.tab)));
   // Event delegation, so buttons drawn later (like the banner's Sign in) also work.
-  document.addEventListener('click', (e) => { const g = e.target.closest('[data-goto]'); if (g) go(g.dataset.goto); });
+  document.addEventListener('click', (e) => {
+    const g = e.target.closest('[data-goto]');
+    if (g) return go(g.dataset.goto, g.dataset.sub);
+    const s = e.target.closest('[data-sub-btn]');
+    if (s) { const view = s.closest('.view'); if (view) go(view.id.replace('view-', ''), s.dataset.subBtn); }
+  });
 
   // ---------- dashboard ----------
   function streakDays(list) {
@@ -143,7 +170,7 @@
     $('#last-ride').innerHTML = last
       ? `<div class="head"><b style="font:700 22px var(--head)">${esc(rideTitle(last))}</b><span class="muted small">${fmtDist(last.distanceM)} ${unit()}</span></div>
          <p class="muted small" style="margin:0">${fmtTime(last.durationSec)} · avg ${fmtSpeed(last.durationSec ? last.distanceM / last.durationSec : 0)} ${speedUnit()} · climb +${last.elevGainM.toFixed(0)} m</p>`
-      : 'No rides yet. Start one from the Ride tab.';
+      : 'No rides yet. Start one from the Rides tab.';
   }
 
   // ---------- ride recording ----------
@@ -229,7 +256,7 @@
       const ride = { id: live.startMs, uid: newUid(), startMs: live.startMs, durationSec: live.elapsed, distanceM: live.distanceM, elevGainM: live.climbM, maxSpeedMps: live.maxSpeed, splits: live.splits, points: live.points, name: '', notes: '' };
       saveRides([ride, ...rides()]);
       pushRide(ride);
-      $('#ride-note').textContent = 'Ride saved. Name it in the Rides tab.';
+      $('#ride-note').textContent = 'Ride saved. Name it in the History tab.';
     } else {
       $('#ride-note').textContent = 'Too short to save.';
     }
@@ -295,7 +322,7 @@
 
   function gpxFor(r) {
     const pts = r.points.map((p) => `      <trkpt lat="${p.lat}" lon="${p.lon}">${p.alt != null ? `<ele>${p.alt.toFixed(1)}</ele>` : ''}</trkpt>`).join('\n');
-    return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Kxko Brief" xmlns="http://www.topografix.com/GPX/1/1">\n  <trk><name>${esc(rideTitle(r))}</name>\n    <trkseg>\n${pts}\n    </trkseg>\n  </trk>\n</gpx>`;
+    return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Kxko Brief" xmlns="http://www.topografix.com/GPX/1/1">\n  <trk><n>${esc(rideTitle(r))}</n>\n    <trkseg>\n${pts}\n    </trkseg>\n  </trk>\n</gpx>`;
   }
 
   function download(name, text, type = 'application/octet-stream') {
@@ -540,7 +567,7 @@
   $('#set-autopause').addEventListener('change', (e) => saveSettings({ autoPause: e.target.checked }));
 
   $('#export-btn').addEventListener('click', () => {
-    download(`kxko-brief-backup-${dayKey(Date.now())}.json`, JSON.stringify({ app: 'kxko-brief', version: 4, exportedAt: new Date().toISOString(), settings: settings(), rides: rides(), study: getBoxes() }, null, 2), 'application/json');
+    download(`kxko-brief-backup-${dayKey(Date.now())}.json`, JSON.stringify({ app: 'kxko-brief', version: 5, exportedAt: new Date().toISOString(), settings: settings(), rides: rides(), study: getBoxes() }, null, 2), 'application/json');
   });
   $('#import-file').addEventListener('change', async (e) => {
     const f = e.target.files[0]; if (!f) return;
@@ -776,14 +803,13 @@
   const isAdminUser = () => moduleOn('admin');
   const canSeeTimetable = () => moduleOn('timetable');
   const canSeeToday = () => moduleOn('today');
+  const canSeePlanner = () => canSeeToday() || canSeeTimetable();
 
   function refreshAdminTab() {
     document.querySelector('[data-tab="admin"]')?.classList.toggle('hidden', !isAdminUser());
-    document.querySelector('[data-tab="timetable"]')?.classList.toggle('hidden', !canSeeTimetable());
-    document.querySelector('[data-tab="today"]')?.classList.toggle('hidden', !canSeeToday());
+    document.querySelector('[data-tab="planner"]')?.classList.toggle('hidden', !canSeePlanner());
     if (!isAdminUser() && currentTab === 'admin') go('dashboard');
-    if (!canSeeTimetable() && currentTab === 'timetable') go('dashboard');
-    if (!canSeeToday() && currentTab === 'today') go('dashboard');
+    if (!canSeePlanner() && currentTab === 'planner') go('dashboard');
     applyTabPrefs();
   }
 
@@ -864,9 +890,11 @@
       });
   }, 10000);
 
-  // ---------- App preferences (Settings → App) ----------
+  // ---------- App preferences (Settings → Look) ----------
   const PREFS_KEY = 'kb5.prefs';
-  const TAB_LABELS = { dashboard: 'Home', ride: 'Ride', study: 'Study', quiz: 'Quiz', rides: 'Rides', today: 'Today', timetable: 'School', admin: 'Admin', settings: 'Settings' };
+  const TAB_LABELS = { dashboard: 'Home', study: 'Study', rides: 'Rides', planner: 'Planner', admin: 'Admin', settings: 'Settings' };
+  const ACCENTS = ['#c6f432', '#7dd3fc', '#f9a8d4', '#fbbf24', '#fb923c', '#a7f3d0', '#c4b5fd', '#f87171'];
+  const SUBJECT_PALETTE = ['#60a5fa', '#34d399', '#f472b6', '#fbbf24', '#a78bfa', '#f87171', '#2dd4bf', '#fb923c', '#94a3b8', '#c6f432'];
   const DEFAULT_PREFS = { accent: '#c6f432', density: 'comfortable', defaultTab: 'dashboard', hiddenTabs: [], subjectColors: {} };
   const prefs = () => ({ ...DEFAULT_PREFS, ...read(PREFS_KEY, {}) });
   const savePrefs = (patch) => { write(PREFS_KEY, { ...prefs(), ...patch }); applyPrefs(); };
@@ -895,16 +923,26 @@
 
   function renderAppSettings() {
     const p = prefs();
-    $('#pref-accent').value = p.accent;
+    $('#pref-accent').innerHTML = ACCENTS.map((c) => `<button type="button" class="swatch ${p.accent === c ? 'on' : ''}" data-accent="${c}" style="--c:${c}" aria-label="Accent colour ${c}" aria-pressed="${p.accent === c}"></button>`).join('');
     $('#pref-density').value = p.density;
     $('#pref-default-tab').innerHTML = Object.keys(TAB_LABELS).map((k) => `<option value="${k}" ${p.defaultTab === k ? 'selected' : ''}>${TAB_LABELS[k]}</option>`).join('');
     $('#pref-tabs').innerHTML = Object.keys(TAB_LABELS).filter((k) => k !== 'dashboard' && k !== 'settings').map((k) => `
       <label class="pref-row"><span>${TAB_LABELS[k]}</span><input type="checkbox" data-tab-toggle="${k}" ${p.hiddenTabs.includes(k) ? '' : 'checked'}></label>`).join('');
-    $('#pref-subjects').innerHTML = (window.KB_SUBJECT_COLORS || []).map((r) => `
-      <label class="pref-row"><span>${esc(r.label)}</span><input type="color" data-subject="${esc(r.label)}" value="${subjectColor(r.match[0])}"></label>`).join('');
+    $('#pref-subjects').innerHTML = (window.KB_SUBJECT_COLORS || []).map((r) => {
+      const current = subjectColor(r.match[0]);
+      return `<div class="subject-row">
+        <span class="subject-name" style="--subj:${esc(current)}">${esc(r.label)}</span>
+        <div class="swatches small">${SUBJECT_PALETTE.map((c) => `<button type="button" class="swatch ${current === c ? 'on' : ''}" data-subject="${esc(r.label)}" data-color="${c}" style="--c:${c}" aria-label="${esc(r.label)} colour ${c}"></button>`).join('')}</div>
+      </div>`;
+    }).join('');
   }
 
-  $('#pref-accent').addEventListener('input', (e) => savePrefs({ accent: e.target.value }));
+  $('#pref-accent').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-accent]');
+    if (!b) return;
+    savePrefs({ accent: b.dataset.accent });
+    renderAppSettings();
+  });
   $('#pref-density').addEventListener('change', (e) => savePrefs({ density: e.target.value }));
   $('#pref-default-tab').addEventListener('change', (e) => savePrefs({ defaultTab: e.target.value }));
   $('#pref-tabs').addEventListener('change', (e) => {
@@ -914,10 +952,11 @@
     e.target.checked ? hidden.delete(key) : hidden.add(key);
     savePrefs({ hiddenTabs: [...hidden] });
   });
-  $('#pref-subjects').addEventListener('input', (e) => {
-    const label = e.target.dataset.subject;
-    if (!label) return;
-    savePrefs({ subjectColors: { ...(prefs().subjectColors || {}), [label]: e.target.value } });
+  $('#pref-subjects').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-subject]');
+    if (!b) return;
+    savePrefs({ subjectColors: { ...(prefs().subjectColors || {}), [b.dataset.subject]: b.dataset.color } });
+    renderAppSettings();
   });
   $('#pref-reset').addEventListener('click', () => {
     if (!confirm('Reset the app look and tab settings to the defaults?')) return;
@@ -925,6 +964,27 @@
   });
 
   window.kbApi.subjectColor = subjectColor;
+
+  // ---------- Server card (fixed presets only) ----------
+  // Each preset is a name the server recognises. The web app sends no free-form commands.
+  const SERVER_PRESETS = [
+    { id: 'status', label: 'Server status', hint: 'CPU, memory and uptime' },
+    { id: 'processes', label: 'Running processes', hint: 'Services managed by PM2' },
+    { id: 'logs', label: 'Recent logs', hint: 'Last 50 lines of the main service' },
+  ];
+  function renderServerPresets() {
+    const box = $('#server-presets');
+    if (!box) return;
+    box.innerHTML = SERVER_PRESETS.map((p) => `<button class="preset" data-preset="${p.id}"><b>${esc(p.label)}</b><small class="muted">${esc(p.hint)}</small></button>`).join('');
+  }
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-preset]');
+    if (!b) return;
+    const out = $('#server-output');
+    const preset = SERVER_PRESETS.find((p) => p.id === b.dataset.preset);
+    out.textContent = `${preset.label}: the server connection is not set up yet. This preset will run once the server bridge is connected.`;
+  });
+  renderServerPresets();
 
   // ---------- start ----------
   try { applyTheme(); applyPrefs(); } catch (err) { console.error('Kxko: theme', err); }
