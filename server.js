@@ -1,9 +1,23 @@
-/* Server manager (Admin → Server). Sends fixed preset requests to Supabase; the server script answers them. */
+/* Server manager (Admin → Server). Draws the fixed presets, sends requests to Supabase, shows the server's reply. */
 (() => {
   'use strict';
-  const LABELS = { status: 'Server status', processes: 'Running processes', logs: 'Recent logs' };
+  const PRESETS = [
+    { id: 'status', label: 'Server status', hint: 'Uptime, memory and disk' },
+    { id: 'processes', label: 'Running processes', hint: 'Top processes on the server' },
+    { id: 'logs', label: 'Recent logs', hint: 'Last 50 lines of the server log' },
+  ];
+  const LABELS = Object.fromEntries(PRESETS.map((p) => [p.id, p.label]));
   const out = () => document.getElementById('server-output');
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  function renderPresets() {
+    const box = document.getElementById('server-presets');
+    if (!box) return;
+    box.innerHTML = PRESETS.map((p) =>
+      `<button class="preset" type="button" data-preset="${p.id}"><b>${esc(p.label)}</b><small class="muted">${esc(p.hint)}</small></button>`
+    ).join('');
+  }
 
   async function sendPreset(preset) {
     const api = window.kbApi;
@@ -31,6 +45,7 @@
   }
 
   document.addEventListener('click', async (e) => {
+    if (e.target.closest('[data-admin-tab="server"]')) { renderPresets(); return; }
     const button = e.target.closest('[data-preset]');
     if (!button) return;
     const preset = button.dataset.preset;
@@ -45,4 +60,6 @@
       out().textContent = `${LABELS[preset]}: ${err.message}`;
     }
   });
+
+  renderPresets();
 })();
