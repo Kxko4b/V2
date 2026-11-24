@@ -158,7 +158,7 @@ async function execute(row) {
   const append = (chunk) => {
     job.output = (job.output + chunk.toString()).slice(-MAX_OUTPUT);
     // Keep the website's live output field refreshed while a command is running.
-    updateRequest(row.id, { output: job.output, status: 'running' }).catch((error) => log(`live output update failed: ${error.message}`));
+    updateRequest(row.id, { output: job.output }).catch((error) => log(`live output update failed: ${error.message}`));
   };
   child.stdout.on('data', append);
   child.stderr.on('data', append);
